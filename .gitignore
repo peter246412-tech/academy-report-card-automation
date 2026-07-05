@@ -1,0 +1,19 @@
+# Generated files
+*.pdf
+*.xlsx
+*.csv
+*.zip
+
+# Local OS/editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Runtime/cache files
+node_modules/
+.clasp.json
+
+# Private local notes or exports
+private/
+exports/
+generated/

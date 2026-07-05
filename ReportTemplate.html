@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <base target="_top">
+    <style>
+      @page {
+        size: A4;
+        margin: 72pt;
+      }
+
+      body {
+        margin: 0;
+        background: #fff;
+        color: #000;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 11pt;
+      }
+
+      .page {
+        width: 451.4pt;
+        min-height: 697pt;
+        page-break-after: always;
+        position: relative;
+        box-sizing: border-box;
+      }
+
+      .page:last-child {
+        page-break-after: auto;
+      }
+
+      .comments-page {
+        min-height: auto;
+        page-break-after: auto;
+      }
+
+      .logo {
+        display: block;
+        width: 233.65px;
+        height: 82.04px;
+        object-fit: contain;
+        margin: 0 auto;
+      }
+
+      .main-title {
+        margin: 28px 0 14px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #999;
+        color: #073763;
+        font-family: "Times New Roman", Times, serif;
+        font-size: 19pt;
+        font-weight: 700;
+        line-height: 1.25;
+        text-align: center;
+      }
+
+      .student-line {
+        border-bottom: 1px solid #aaa;
+        text-align: center;
+        padding: 5px 0 14px;
+        margin-bottom: 18px;
+        font-size: 11pt;
+      }
+
+      .student-line b {
+        font-weight: 400;
+      }
+
+      table {
+        border-spacing: 0;
+        border-collapse: collapse;
+      }
+
+      td,
+      th {
+        padding: 5pt;
+        vertical-align: top;
+      }
+
+      .attitude-table {
+        width: 232.6pt;
+        margin: 0 auto 14px;
+      }
+
+      .attitude-table td {
+        border: 1pt solid #000;
+        height: 15pt;
+      }
+
+      .attitude-table .left {
+        width: 90.8pt;
+      }
+
+      .attitude-table .right {
+        width: 141.8pt;
+      }
+
+      .small-bold {
+        font-size: 8pt;
+        font-weight: 700;
+      }
+
+      .bold {
+        font-weight: 700;
+      }
+
+      .chart-block {
+        width: 430px;
+        height: 252px;
+        margin: 18px auto 20px;
+        position: relative;
+      }
+
+      .chart-title {
+        color: #777;
+        font-size: 18px;
+        text-align: left;
+      }
+
+      .chart-heading {
+        width: 430px;
+        margin-bottom: 8px;
+        border-collapse: collapse;
+      }
+
+      .chart-heading td {
+        padding: 0;
+        vertical-align: middle;
+      }
+
+      .chart-legend {
+        text-align: right;
+        color: #555;
+        font-size: 8pt;
+        white-space: nowrap;
+      }
+
+      .legend-item {
+        display: inline-block;
+        margin-left: 10px;
+      }
+
+      .legend-swatch {
+        display: inline-block;
+        width: 0;
+        height: 9px;
+        margin-left: 4px;
+        vertical-align: -1px;
+        border-left: 12px solid #000;
+      }
+
+      .legend-average {
+        border-left-color: #9fc5d8;
+      }
+
+      .legend-student {
+        border-left-color: #0b4f65;
+      }
+
+      .chart-area {
+        height: 170px;
+        border-bottom: 1px solid #333;
+        position: relative;
+        padding-left: 30px;
+      }
+
+      .grid {
+        position: absolute;
+        left: 30px;
+        right: 0;
+        height: 1px;
+        background: #d8d8d8;
+      }
+
+      .y-label {
+        position: absolute;
+        left: 0;
+        width: 24px;
+        text-align: right;
+        font-size: 8pt;
+      }
+
+      .bars {
+        position: absolute;
+        left: 48px;
+        right: 12px;
+        bottom: 1px;
+        top: 10px;
+      }
+
+      .bar-wrap {
+        position: absolute;
+        bottom: 0;
+        height: 150px;
+        text-align: center;
+      }
+
+      .bar {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 16px;
+        background: #5b99b2;
+      }
+
+      .bar-label {
+        position: absolute;
+        left: -20px;
+        right: -20px;
+        bottom: 0;
+        font-size: 7pt;
+        white-space: nowrap;
+        text-align: center;
+      }
+
+      .score-label {
+        position: absolute;
+        left: -20px;
+        right: -20px;
+        font-size: 7pt;
+        text-align: center;
+      }
+
+      .pdf-chart {
+        width: 430px;
+        height: 208px;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      .pdf-chart-axis {
+        width: 36px;
+        font-size: 8pt;
+        color: #000;
+        vertical-align: top;
+        padding: 0 8px 0 0;
+      }
+
+      .pdf-chart-axis div {
+        height: 41.6px;
+        text-align: right;
+      }
+
+      .pdf-chart-plot {
+        border-bottom: 1px solid #333;
+        padding: 0;
+        vertical-align: bottom;
+      }
+
+      .pdf-bars {
+        width: 100%;
+        height: 208px;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      .pdf-bar-cell {
+        height: 184px;
+        text-align: center;
+        vertical-align: bottom;
+        padding: 0 10px;
+      }
+
+      .pdf-score {
+        font-size: 7pt;
+        line-height: 1;
+        margin-bottom: 3px;
+      }
+
+      .pdf-bar {
+        width: 0;
+        border-left: <?= report.isTwoSubject ? '30px' : '20px' ?> solid #5b99b2;
+        margin: 0 auto;
+        font-size: 0;
+        line-height: 0;
+      }
+
+      .pdf-average-bar {
+        border-left-color: #9fc5d8;
+      }
+
+      .pdf-student-bar {
+        border-left-color: #0b4f65;
+      }
+
+      .pdf-pair {
+        width: <?= report.isTwoSubject ? '82px' : '56px' ?>;
+        height: 184px;
+        margin: 0 auto;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      .pdf-pair-cell {
+        height: 184px;
+        text-align: center;
+        vertical-align: bottom;
+        padding: 0 2px;
+      }
+
+      .pdf-label-cell {
+        height: 20px;
+        text-align: center;
+        font-size: 7pt;
+        padding: 3px 8px 0;
+        white-space: nowrap;
+      }
+
+      .textbook-table {
+        width: 431pt;
+        margin: 0 auto;
+      }
+
+      .textbook-table td {
+        border: 1pt solid #000;
+      }
+
+      .textbook-title {
+        text-align: center;
+        font-weight: 700;
+        height: 21pt;
+        vertical-align: middle;
+        line-height: 21pt;
+      }
+
+      .textbook-label {
+        width: 115pt;
+      }
+
+      .textbook-value {
+        width: 316pt;
+      }
+
+      .bottom-logo {
+        position: absolute;
+        left: 50%;
+        bottom: 0;
+        transform: translateX(-50%);
+      }
+
+      .semester-heading {
+        margin: 18px auto 18px;
+        width: 431pt;
+        font-size: 18pt;
+        font-weight: 700;
+      }
+
+      .heading-icon {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        margin-right: 6px;
+        border-left: 1px solid #bbb;
+        border-bottom: 1px solid #bbb;
+        vertical-align: -2px;
+        position: relative;
+      }
+
+      .heading-icon span {
+        position: absolute;
+        bottom: 1px;
+        width: 3px;
+      }
+
+      .heading-icon .bar-1 {
+        left: 3px;
+        height: 6px;
+        background: #6aa84f;
+      }
+
+      .heading-icon .bar-2 {
+        left: 7px;
+        height: 10px;
+        background: #3c78d8;
+      }
+
+      .heading-icon .bar-3 {
+        left: 11px;
+        height: 13px;
+        background: #cc0000;
+      }
+
+      .comment-table {
+        width: 431pt;
+        margin: 0 auto;
+        border-collapse: collapse;
+        page-break-inside: auto;
+      }
+
+      .comment-table td {
+        border: 1.2pt solid #000;
+        padding: 8pt 10pt;
+      }
+
+      .comment-table tr {
+        page-break-inside: auto;
+      }
+
+      .comment-head-left {
+        width: 95pt;
+        background: #f4f4f4;
+        font-weight: 700;
+        text-align: center;
+      }
+
+      .comment-head-right {
+        width: 336pt;
+        background: #f4f4f4;
+        text-align: center;
+        font-weight: 700;
+      }
+
+      .comment-skill {
+        width: 95pt;
+        font-weight: 700;
+        font-size: 12pt;
+        height: <?= report.isTwoSubject ? '74pt' : '42pt' ?>;
+        text-align: center;
+        vertical-align: middle;
+      }
+
+      .comment-text {
+        width: 336pt;
+        min-height: <?= report.isTwoSubject ? '74pt' : '42pt' ?>;
+        font-size: 11pt;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        vertical-align: middle;
+      }
+
+      .comment-line {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <img class="logo" src="<?!= report.logoDataUri ?>" alt="World Prep">
+      <div class="main-title"><?= report.title ?></div>
+      <div class="student-line">
+        Name: <b><?= report.studentName ?></b>&nbsp;&nbsp;
+        Grade: <b><?= report.grade ?></b>&nbsp;&nbsp;
+        Class: <b><?= report.className ?></b>
+      </div>
+
+      <table class="attitude-table">
+        <tr>
+          <td class="left bold">Attitude</td>
+          <td class="right small-bold">Need Improvement/Good/Perfect</td>
+        </tr>
+        <tr>
+          <td>Vocabulary</td>
+          <td><?= report.vocabularyRating ?></td>
+        </tr>
+        <tr>
+          <td>Homework</td>
+          <td><?= report.homework ?></td>
+        </tr>
+        <tr>
+          <td>Participation</td>
+          <td><?= report.participation ?></td>
+        </tr>
+      </table>
+
+      <div class="chart-block">
+        <table class="chart-heading">
+          <tr>
+            <td class="chart-title">Achievement Rate</td>
+            <td class="chart-legend">
+              <span class="legend-item">평균:<span class="legend-swatch legend-average"></span></span>
+              <span class="legend-item">학생점수:<span class="legend-swatch legend-student"></span></span>
+            </td>
+          </tr>
+        </table>
+        <table class="pdf-chart">
+          <tr>
+            <td class="pdf-chart-axis" rowspan="2">
+              <div>100</div>
+              <div>75</div>
+              <div>50</div>
+              <div>25</div>
+              <div>0</div>
+            </td>
+            <td class="pdf-chart-plot">
+              <table class="pdf-bars">
+                <tr>
+                  <? for (var i = 0; i < report.subjects.length; i++) {
+                    var subject = report.subjects[i];
+                    var studentHeight = Math.max(1, Math.min(100, subject.score)) * 1.84;
+                    var averageValue = subject.average === null ? 0 : subject.average;
+                    var averageHeight = Math.max(1, Math.min(100, averageValue)) * 1.84; ?>
+                    <td class="pdf-bar-cell">
+                      <table class="pdf-pair">
+                        <tr>
+                          <td class="pdf-pair-cell">
+                            <? if (subject.average !== null) { ?>
+                              <div class="pdf-score"><?= subject.average ?></div>
+                              <div class="pdf-bar pdf-average-bar" style="height: <?= averageHeight ?>px;">.</div>
+                            <? } ?>
+                          </td>
+                          <td class="pdf-pair-cell">
+                            <div class="pdf-score"><?= subject.score ?></div>
+                            <div class="pdf-bar pdf-student-bar" style="height: <?= studentHeight ?>px;">.</div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  <? } ?>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <table style="width: 100%; border-collapse: collapse; table-layout: fixed;">
+                <tr>
+                  <? for (var j = 0; j < report.subjects.length; j++) { ?>
+                    <td class="pdf-label-cell"><?= report.subjects[j].name ?></td>
+                  <? } ?>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </div>
+
+      <table class="textbook-table">
+        <tr>
+          <td class="textbook-title" colspan="2">TEXTBOOK</td>
+        </tr>
+        <tr>
+          <td class="textbook-label">Vocabulary</td>
+          <td class="textbook-value"><?= report.vocabularyBook ?></td>
+        </tr>
+        <tr>
+          <td class="textbook-label">Writing/Grammar</td>
+          <td class="textbook-value"><?= report.writingGrammarBook ?></td>
+        </tr>
+        <tr>
+          <td class="textbook-label">Reading/Listening</td>
+          <td class="textbook-value"><?= report.readingListeningBook ?></td>
+        </tr>
+      </table>
+
+      <img class="logo bottom-logo" src="<?!= report.logoDataUri ?>" alt="World Prep">
+    </div>
+
+    <div class="page comments-page">
+      <div class="semester-heading">
+        <span class="heading-icon"><span class="bar-1"></span><span class="bar-2"></span><span class="bar-3"></span></span><?= report.commentSectionTitle ?>
+      </div>
+      <table class="comment-table">
+        <tr>
+          <td class="comment-head-left">Skill</td>
+          <td class="comment-head-right">Teacher’s Comments</td>
+        </tr>
+        <? for (var j = 0; j < report.subjects.length; j++) {
+          var item = report.subjects[j]; ?>
+          <tr>
+            <td class="comment-skill"><?= item.name ?></td>
+            <td class="comment-text"><?= item.comment || '' ?></td>
+          </tr>
+        <? } ?>
+      </table>
+      <div class="comment-line"></div>
+      <div style="height: 48px;"></div>
+      <img class="logo" src="<?!= report.logoDataUri ?>" alt="World Prep">
+    </div>
+  </body>
+</html>
