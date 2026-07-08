@@ -33,6 +33,8 @@ const EXTRA_COLUMNS = [
 const RATING_COLUMNS = ['Vocabulary', 'Homework', 'Participation'];
 const RATING_OPTIONS = ['Need Improvement', 'Good', 'Perfect'];
 const GRAMMAR_GROUP_OPTIONS = ['A', 'B', 'C'];
+const OPENAI_API_ENDPOINT = 'https://api.openai.com/v1/responses';
+const OPENAI_API_KEY_PROPERTY = 'OPENAI_API_KEY';
 
 const DESIRED_SCORE_INPUT_HEADERS = [
   'Writing(Alpha) 점수',
@@ -79,6 +81,7 @@ const DEFAULT_OUTPUT_SETTINGS = [
   ['출력월', '2026년 6월', '성적표 생성 월'],
   ['저장폴더명', '2026년 6월 영어 성적표', 'PDF가 저장될 Google Drive 폴더명'],
   ['파일명규칙', '{월}_{반 이름}_{학생 이름}_영어성적표.pdf', 'PDF 파일명 규칙'],
+  ['AI 모델', 'gpt-5-mini', 'AI 코멘트 다듬기에 사용할 OpenAI 모델명'],
 ];
 
 function onOpen() {
@@ -89,6 +92,10 @@ function onOpen() {
     .addItem('반 이름 입력해서 생성', 'generateReportsByClassPrompt')
     .addSeparator()
     .addItem('시상 순위표 생성', 'generateAwardRankingSheet')
+    .addSeparator()
+    .addItem('AI API 키 저장', 'setOpenAiApiKey')
+    .addItem('선택 행 AI 코멘트 다듬기', 'polishSelectedRowsComments')
+    .addItem('전체 AI 코멘트 다듬기', 'polishAllComments')
     .addSeparator()
     .addItem('필요 컬럼 추가/점검', 'ensureReportColumns')
     .addItem('설정 점검', 'checkReportSettings')
@@ -370,6 +377,140 @@ function generateActiveRowReport() {
     return;
   }
   generateReports_([row], ctx);
+}
+
+function setOpenAiApiKey() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    'OpenAI API 키 저장',
+    'OpenAI API 키를 입력하세요. 이 값은 Apps Script의 Script Properties에 저장됩니다.',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+
+  const apiKey = response.getResponseText().trim();
+  if (!apiKey) {
+    ui.alert('API 키가 비어 있습니다.');
+    return;
+  }
+
+  PropertiesService.getScriptProperties().setProperty(OPENAI_API_KEY_PROPERTY, apiKey);
+  ui.alert('OpenAI API 키를 저장했습니다.');
+}
+
+function polishSelectedRowsComments() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getActiveSheet();
+  const ui = SpreadsheetApp.getUi();
+
+  if (sheet.getName() !== CONFIG.scoreSheet) {
+    ui.alert(`'${CONFIG.scoreSheet}' 탭에서 학생 행을 선택한 뒤 실행하세요.`);
+    return;
+  }
+
+  const apiKey = getOpenAiApiKey_();
+  if (!apiKey) {
+    ui.alert('먼저 메뉴에서 "AI API 키 저장"을 실행해 OpenAI API 키를 저장하세요.');
+    return;
+  }
+
+  const range = sheet.getActiveRange();
+  const startRow = Math.max(2, range.getRow());
+  const endRow = range.getLastRow();
+  if (endRow < 2) {
+    ui.alert('헤더가 아닌 학생 데이터 행을 선택하세요.');
+    return;
+  }
+
+  const targetRowCount = endRow - startRow + 1;
+  if (targetRowCount > 5) {
+    const response = ui.alert(
+      'AI 코멘트 다듬기 확인',
+      `${targetRowCount}개 행을 AI로 다듬습니다. API 사용량이 발생할 수 있습니다. 계속할까요?`,
+      ui.ButtonSet.OK_CANCEL
+    );
+    if (response !== ui.Button.OK) return;
+  }
+
+  polishCommentRows_(ss, sheet, startRow, targetRowCount, apiKey, '선택 행 AI 코멘트 다듬기');
+}
+
+function polishAllComments() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName(CONFIG.scoreSheet);
+  const ui = SpreadsheetApp.getUi();
+
+  if (!sheet) {
+    ui.alert(`'${CONFIG.scoreSheet}' 탭을 찾지 못했습니다.`);
+    return;
+  }
+
+  const apiKey = getOpenAiApiKey_();
+  if (!apiKey) {
+    ui.alert('먼저 메뉴에서 "AI API 키 저장"을 실행해 OpenAI API 키를 저장하세요.');
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    ui.alert('성적입력 시트에 학생 데이터가 없습니다.');
+    return;
+  }
+
+  const targetRowCount = lastRow - 1;
+  const response = ui.alert(
+    '전체 AI 코멘트 다듬기 확인',
+    `${targetRowCount}개 학생 행을 전체 검사합니다.\n코멘트가 있는 칸만 AI로 다듬고, API 사용량이 발생할 수 있습니다.\n계속할까요?`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response !== ui.Button.OK) return;
+
+  polishCommentRows_(ss, sheet, 2, targetRowCount, apiKey, '전체 AI 코멘트 다듬기');
+}
+
+function polishCommentRows_(ss, sheet, startRow, targetRowCount, apiKey, title) {
+  const outputConfig = readKeyValueConfig_(ss.getSheetByName(CONFIG.outputConfigSheet));
+  const model = stringValue_(outputConfig['AI 모델']) || 'gpt-5-mini';
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const values = sheet.getRange(startRow, 1, targetRowCount, sheet.getLastColumn()).getValues();
+
+  let changedCount = 0;
+  let skippedCount = 0;
+  const failures = [];
+
+  values.forEach((rowValues, rowOffset) => {
+    const rowNumber = startRow + rowOffset;
+    const row = {};
+    headers.forEach((header, index) => row[header] = rowValues[index]);
+
+    const entries = buildCommentEntriesForRow_(headers, row);
+    if (!entries.length) {
+      skippedCount += 1;
+      return;
+    }
+
+    try {
+      const studentName = stringValue_(row['학생 이름']);
+      const polished = polishCommentEntries_(entries, studentName, model, apiKey);
+      entries.forEach(entry => {
+        const polishedText = stringValue_(polished[entry.columnName]);
+        if (!polishedText) return;
+        const cell = sheet.getRange(rowNumber, entry.columnIndex);
+        cell.setValue(polishedText);
+        cell.setNote(`AI 다듬기 전 원문: ${entry.rawComment}`);
+        changedCount += 1;
+      });
+    } catch (error) {
+      failures.push(`${rowNumber}행: ${error.message}`);
+    }
+  });
+
+  SpreadsheetApp.getUi().alert([
+    `${title} 완료`,
+    `변경된 코멘트: ${changedCount}개`,
+    `건너뛴 행: ${skippedCount}개`,
+    failures.length ? `실패:\n${failures.slice(0, 5).join('\n')}` : '',
+  ].filter(Boolean).join('\n'));
 }
 
 function generateReportsByClassPrompt() {
@@ -720,6 +861,111 @@ function appendLogs_(logs) {
     sheet.appendRow(['생성일시', '월', '반 이름', '학생 이름', '상태', 'PDF 파일명', '메시지']);
   }
   sheet.getRange(sheet.getLastRow() + 1, 1, logs.length, logs[0].length).setValues(logs);
+}
+
+function buildCommentEntriesForRow_(headers, row) {
+  return SUBJECTS.map(subject => {
+    const columnIndex = headers.indexOf(subject.commentColumn) + 1;
+    const rawComment = stringValue_(row[subject.commentColumn]);
+    if (!columnIndex || !rawComment) return null;
+    return {
+      columnName: subject.commentColumn,
+      columnIndex,
+      subjectName: subject.name || subject.key,
+      rawComment,
+    };
+  }).filter(Boolean);
+}
+
+function polishCommentEntries_(entries, studentName, model, apiKey) {
+  const promptData = {
+    studentName,
+    comments: entries.map(entry => ({
+      columnName: entry.columnName,
+      subjectName: entry.subjectName,
+      comment: entry.rawComment,
+    })),
+  };
+
+  const payload = {
+    model,
+    input: [
+      {
+        role: 'system',
+        content: [
+          'You rewrite brief Korean teacher notes into warm parent-facing comments for elementary English academy report cards.',
+          'Return a JSON object only. Do not wrap it in markdown.',
+          'Use the exact input columnName values as JSON keys.',
+          'Each value must be one natural Korean sentence ending with 습니다 or 좋겠습니다.',
+          'Keep the original meaning. Do not invent achievements, scores, diagnoses, or facts.',
+          'Tone: kind, professional, specific, and balanced.',
+          'If the note is negative, acknowledge effort first, then mention the improvement area gently.',
+          'Example: "스펠링 실수가 잦음" -> "열심히 참여하고 있으나 스펠링에서 실수가 잦아 조금 더 꼼꼼한 확인이 필요합니다."',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(promptData),
+      },
+    ],
+  };
+
+  const response = UrlFetchApp.fetch(OPENAI_API_ENDPOINT, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+
+  const responseCode = response.getResponseCode();
+  const responseText = response.getContentText();
+  if (responseCode < 200 || responseCode >= 300) {
+    throw new Error(`OpenAI API 오류 (${responseCode}): ${responseText.slice(0, 500)}`);
+  }
+
+  const responseJson = JSON.parse(responseText);
+  const outputText = extractOpenAiOutputText_(responseJson);
+  if (!outputText) {
+    throw new Error('OpenAI 응답에서 코멘트 내용을 찾지 못했습니다.');
+  }
+
+  return parseJsonObjectFromText_(outputText);
+}
+
+function extractOpenAiOutputText_(responseJson) {
+  if (responseJson.output_text) return responseJson.output_text;
+
+  const output = responseJson.output || [];
+  for (let i = 0; i < output.length; i += 1) {
+    const content = output[i].content || [];
+    for (let j = 0; j < content.length; j += 1) {
+      if (content[j].text) return content[j].text;
+      if (content[j].type === 'output_text' && content[j].text) return content[j].text;
+    }
+  }
+
+  return '';
+}
+
+function parseJsonObjectFromText_(text) {
+  const cleaned = stringValue_(text)
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('OpenAI 응답을 JSON으로 해석하지 못했습니다.');
+  }
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+function getOpenAiApiKey_() {
+  return stringValue_(PropertiesService.getScriptProperties().getProperty(OPENAI_API_KEY_PROPERTY));
 }
 
 function getOrCreateFolder_(folderName) {
