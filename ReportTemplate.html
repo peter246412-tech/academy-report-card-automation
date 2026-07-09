@@ -237,11 +237,12 @@
       }
 
       .pdf-chart-axis div {
-        height: 18.9px;
+        height: 16.73px;
         text-align: right;
       }
 
       .pdf-chart-plot {
+        height: 184px;
         border-bottom: 1px solid #333;
         padding: 0;
         vertical-align: bottom;
@@ -249,7 +250,7 @@
 
       .pdf-bars {
         width: 100%;
-        height: 208px;
+        height: 184px;
         border-collapse: collapse;
         table-layout: fixed;
       }
@@ -262,6 +263,7 @@
       }
 
       .pdf-score {
+        display: none;
         font-size: 7pt;
         line-height: 1;
         margin-bottom: 3px;
@@ -500,12 +502,10 @@
                         <tr>
                           <td class="pdf-pair-cell">
                             <? if (subject.average !== null) { ?>
-                              <div class="pdf-score"><?= subject.average ?></div>
                               <div class="pdf-bar pdf-average-bar" style="height: <?= averageHeight ?>px;">.</div>
                             <? } ?>
                           </td>
                           <td class="pdf-pair-cell">
-                            <div class="pdf-score"><?= subject.score ?></div>
                             <div class="pdf-bar pdf-student-bar" style="height: <?= studentHeight ?>px;">.</div>
                           </td>
                         </tr>
