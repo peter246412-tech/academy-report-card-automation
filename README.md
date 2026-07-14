@@ -2,6 +2,27 @@
 
 Google Apps Script based automation system for generating English academy report cards and award rankings from Google Sheets.
 
+## System at a Glance
+
+| Score Input Sheet | Report Generation Menu |
+|:---:|:---:|
+| ![Anonymized score input sheet](docs/images/01-score-input.png) | ![Report generation menu in Google Sheets](docs/images/02-generate-menu.png) |
+| **Generated PDF Report Card** | **Automated Award Ranking Sheet** |
+| ![Generated PDF report card with anonymized data](docs/images/03-report-card-pdf.png) | ![Automatically generated award ranking sheet](docs/images/04-award-ranking.png) |
+
+_All screens use anonymized demonstration data. No real student information is shown._
+
+## Automation Workflow
+
+```mermaid
+flowchart TD
+    A[Teacher enters scores] --> B[Validate inputs and required columns]
+    B --> C[Calculate class and grammar-group averages]
+    C --> D[Apply the HTML report template]
+    D --> E[Generate PDFs and save them to Google Drive]
+    E --> F[Write generation logs and award rankings]
+```
+
 ## Project Background
 
 I joined an elementary English academy as an assistant English instructor during my university break. The academy was preparing student report cards, comments, average comparisons, and award rankings manually.
