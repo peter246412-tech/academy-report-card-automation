@@ -98,6 +98,12 @@ Teachers can update operational data without editing code:
 - `ReportTemplate.html`: HTML/CSS template for the PDF report card
 - `업데이트_이용방법.md`: operational setup guide for applying updates in Apps Script
 
+## Engineering Challenge and Recovery
+
+An early version exposed an important data-integrity issue: while cleaning up blank rows, some student records disappeared from the working sheet. The underlying problem was that the original logic relied too heavily on row positions, even though those positions could change whenever rows were reorganized.
+
+I treated this as a development and recovery problem rather than hiding it. I revised the synchronization logic to identify students using stable student IDs, validate the result against the original roster, and restore matched student data instead of assuming that the same row still represented the same person. This experience strengthened the system's safeguards and reinforced the importance of designing spreadsheet automation around data identity rather than visual row order.
+
 ## Impact
 
 This project converted a manual report-card workflow into a repeatable automation process. It helped teachers:
@@ -109,6 +115,14 @@ This project converted a manual report-card workflow into a repeatable automatio
 - Prepare award rankings immediately after entering scores
 
 The project is a practical example of applying AI-era tooling and automation thinking to a real workplace problem, even outside a formal software engineering role.
+
+## User Feedback and Workplace Recognition
+
+After introducing the system, I conducted short feedback check-ins with the academy director and teachers. I asked whether the tool was easy to use, which features were most helpful, whether it reduced the inconvenience of the previous workflow, what additional features they needed, and whether they intended to keep using it.
+
+The feedback was consistently positive. The staff recognized that the system reduced repetitive work and made the report-card process easier to manage, while the conversations also gave me practical direction for future improvements.
+
+The response went beyond positive comments about the tool. Less than one month after I started working at the academy, I was asked whether I would consider moving beyond the part-time role and joining as a regular staff member. I was also asked whether I would be willing to take on future outsourced automation work for the academy. For me, this was meaningful evidence that proactively identifying an operational problem and delivering a usable solution could build trust quickly, even without holding a formal software position.
 
 ## Privacy Note
 
