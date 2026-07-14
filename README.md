@@ -6,7 +6,17 @@ Google Apps Script based automation system for generating English academy report
 
 I joined an elementary English academy as an assistant English instructor during my university break. The academy was preparing student report cards, comments, average comparisons, and award rankings manually.
 
-Although my role was not originally a software role, I noticed that the workflow was repetitive, time-consuming, and error-prone. As a Social Science & AI student, I proposed building a lightweight automation tool using Google Sheets and Apps Script, which fit the academy's existing workflow without requiring a separate application or paid system.
+Even in a part-time role, I try to look beyond the task immediately in front of me and understand the wider workflow. I ask questions such as:
+
+- Why is this work performed this way?
+- How much time is being spent on repetitive tasks?
+- As staff fatigue accumulates, how do errors and service quality change?
+- How might those changes affect parent satisfaction, student re-enrollment, and academy revenue?
+- How much time and cost could be saved by introducing the right technology?
+
+From this perspective, manual report-card preparation was more than an inconvenient routine. I believed that repeated administrative work could increase teacher fatigue and the likelihood of mistakes, eventually affecting the quality of service delivered to parents and students.
+
+Rather than replacing tools the staff already knew, I kept the academy's existing Google Sheets environment and automated report generation, average calculations, and award rankings with Google Apps Script. This lightweight approach reduced repetitive work without requiring a separate application or paid system.
 
 This project was built to help teachers generate report cards faster, reduce manual calculation work, and make student award rankings immediately available after entering scores.
 
