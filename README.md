@@ -1,6 +1,6 @@
 # English Academy Report Automation
 
-Google Apps Script based automation system for generating English academy report cards and award rankings from Google Sheets.
+A Google Apps Script system that turns an academy's existing Google Sheets workflow into a safer report-card pipeline, from roster management and score entry to PDF generation and award rankings.
 
 ## System at a Glance
 
@@ -16,11 +16,12 @@ _All screens use anonymized demonstration data. No real student information is s
 
 ```mermaid
 flowchart TD
-    A[Teacher enters scores] --> B[Validate inputs and required columns]
-    B --> C[Calculate class and grammar-group averages]
-    C --> D[Apply the HTML report template]
-    D --> E[Generate PDFs and save them to Google Drive]
-    E --> F[Write generation logs and award rankings]
+    A[Teacher updates the student roster] --> B[Safe ID-based synchronization]
+    B --> C[Score-entry sheet in academy class order]
+    C --> D[Teacher enters scores and comments]
+    D --> E[Calculate class and grammar-group averages]
+    E --> F[Generate PDF reports in Google Drive]
+    D --> G[Generate class award rankings]
 ```
 
 ## Project Background
@@ -43,6 +44,11 @@ This project was built to help teachers generate report cards faster, reduce man
 
 ## What This System Does
 
+- Synchronizes roster additions, edits, moves, and removals with the score-entry sheet
+- Uses stable student IDs so data follows the student rather than a visual row position
+- Protects entered scores, comments, notes, and formulas when a roster match is uncertain
+- Keeps both operational sheets in the academy's class sequence: Beginner, Pre-Inter, Advanced, and PowerStation
+- Preserves existing Google Sheets dropdown styling during routine synchronization
 - Generates individual PDF report cards from Google Sheets data
 - Supports 2-subject and 4-subject report formats automatically
 - Compares each student's score with the relevant class or grammar-group average
@@ -55,11 +61,13 @@ This project was built to help teachers generate report cards faster, reduce man
 
 ## Main Workflow
 
-1. Teachers enter scores and comments in the `성적입력` sheet.
-2. The menu `성적표 생성 > 필요 컬럼 추가/점검` checks and prepares required columns.
-3. Teachers generate PDFs for one student, all students, or a selected class.
-4. The system creates PDF report cards in a Google Drive folder.
-5. Teachers run `성적표 생성 > 시상 순위표 생성` to create class-by-class rankings for awards.
+1. Staff maintain class defaults in `반별설정` and students in `학생명단`.
+2. Roster changes are synchronized automatically to `성적입력`; a manual sync menu remains as a recovery option.
+3. Teachers enter scores, ratings, and comments in `성적입력`.
+4. The menu `성적표 생성 > 필요 기능 추가/점검` validates the sheet structure and installs the required trigger.
+5. Teachers generate one student's PDF or all rows marked for output.
+6. The system saves reports to Google Drive and records the result in `생성로그`.
+7. Teachers generate `시상순위` directly from the completed score data.
 
 ## Key Features
 
@@ -103,8 +111,33 @@ Students are grouped by class and sorted from highest to lowest total score. Tie
 Teachers can update operational data without editing code:
 
 - `반별설정`: active class list and class-related defaults
-- `평균그룹설정`: average calculation rules
 - `출력설정`: report title, output month, folder name, and file name rule
+
+### Roster Synchronization and Data Safety
+
+The roster and score-entry sheet are intentionally separated: staff manage identity and class placement in `학생명단`, while teachers work with assessment data in `성적입력`.
+
+The synchronization layer makes that separation reliable:
+
+- A hidden `학생ID` is assigned once and used as the primary match key.
+- Existing score rows are updated in place, preserving assessment data.
+- New roster students receive score rows and class-level textbook defaults.
+- Removed students are cleared automatically only when no protected assessment data exists.
+- If scores, comments, notes, or formulas would be orphaned, synchronization stops and identifies the rows that require review.
+- A document lock prevents overlapping automatic and manual synchronization runs.
+
+### Operational Class Ordering
+
+Both `학생명단` and `성적입력` use the same normalized class order:
+
+```text
+Beginner 1-4
+Pre-Inter 1-4
+Advanced 1-4
+PowerStation 1-2
+```
+
+Spaces, hyphens, and capitalization are normalized for comparison. Blank separator rows are inserted between class groups without making row position part of student identity.
 
 ## Technology
 
@@ -112,27 +145,52 @@ Teachers can update operational data without editing code:
 - Google Sheets
 - HTML/CSS for PDF templates
 - Google Drive PDF export
+- OpenAI Responses API for optional teacher-comment polishing
+- Script Properties for API-key storage
+- Installable spreadsheet triggers and Apps Script locking
 
 ## Files
 
-- `Code.gs`: Apps Script logic for menus, sheet setup, PDF generation, average calculation, and award ranking
+- `Code.gs`: synchronization, data safeguards, menus, PDF generation, averages, AI comments, and ranking logic
 - `ReportTemplate.html`: HTML/CSS template for the PDF report card
+- `PORTFOLIO_CASE_STUDY.md`: detailed problem-solving and iteration record
 - `업데이트_이용방법.md`: operational setup guide for applying updates in Apps Script
+- `appsscript.json`: V8 runtime, timezone, and required OAuth scopes
 
-## Engineering Challenge and Recovery
+## Engineering Journey
 
-An early version exposed an important data-integrity issue: while cleaning up blank rows, some student records disappeared from the working sheet. The underlying problem was that the original logic relied too heavily on row positions, even though those positions could change whenever rows were reorganized.
+### 1. Replacing Row-Position Assumptions with Stable Identity
 
-I treated this as a development and recovery problem rather than hiding it. I revised the synchronization logic to identify students using stable student IDs, validate the result against the original roster, and restore matched student data instead of assuming that the same row still represented the same person. This experience strengthened the system's safeguards and reinforced the importance of designing spreadsheet automation around data identity rather than visual row order.
+An early cleanup routine revealed that spreadsheet row positions are not reliable identities. Rows move whenever classes are sorted or separator rows are inserted, so a position-based update could associate assessment data with the wrong student.
+
+I redesigned the model around hidden, persistent student IDs. Legacy rows are backfilled only when a unique visible match or unique name makes the association safe. This changed the synchronization contract from "same row" to "same student."
+
+### 2. Making Deletion Conservative
+
+A roster deletion should remove an unused score row, but it should never silently erase completed assessment work. I separated class defaults from protected score data and added checks for values, cell notes, and formulas. Clean rows can be removed automatically; rows containing teacher work stop the sync and produce a review list.
+
+### 3. Fixing a Dropdown-Color Regression
+
+An intermediate version refreshed data-validation rules during every sync. In Google Sheets, that also rebuilt the dropdown presentation and turned carefully assigned class colors white. I traced the problem to synchronization doing two unrelated jobs: moving data and rebuilding UI rules.
+
+The final version isolates routine roster synchronization from validation-rule setup. Automatic change handling responds only to structural membership changes, while formatting events are ignored. Dropdown setup remains an explicit maintenance operation, so class colors survive normal roster edits.
+
+### 4. Creating a Deterministic Academy Class Order
+
+Alphabetical sorting placed `PowerStation` before `Pre-Inter` and did not match the academy's teaching progression. I introduced an explicit domain order and a normalization function that handles variants such as `Pre-Inter 1`, `Pre-Inter1`, and differences in capitalization. The score sheet then mirrors the roster order through student IDs.
+
+The detailed iteration record is available in [PORTFOLIO_CASE_STUDY.md](PORTFOLIO_CASE_STUDY.md).
 
 ## Impact
 
 This project converted a manual report-card workflow into a repeatable automation process. It helped teachers:
 
 - Reduce repetitive data entry and calculation work
+- Maintain one roster source without manually copying changes into the score sheet
 - Generate report cards more quickly
 - Avoid manual average and ranking mistakes
 - Produce consistent PDF designs
+- Protect existing teacher input during roster changes and class reordering
 - Prepare award rankings immediately after entering scores
 
 The project is a practical example of applying AI-era tooling and automation thinking to a real workplace problem, even outside a formal software engineering role.

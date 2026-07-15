@@ -25,6 +25,13 @@ const GRAMMAR_GROUP_OPTIONS = ['A', 'B', 'C'];
 const OPENAI_API_ENDPOINT = 'https://api.openai.com/v1/responses';
 const OPENAI_API_KEY_PROPERTY = 'OPENAI_API_KEY';
 const STUDENT_ID_HEADER = '학생ID';
+const AUTOMATIC_ROSTER_SYNC_ENABLED = true;
+const AUTO_SYNC_TRIGGER_HANDLER = 'handleSpreadsheetChange';
+const LEGACY_SYNC_TRIGGER_HANDLERS = [
+  'syncClassSettingsDropdowns_',
+  'refreshAutomaticDropdowns_',
+  'syncStudentRosterToScoreInput_',
+];
 
 const DESIRED_SCORE_INPUT_HEADERS = [
   'Writing(Alpha) 점수',
@@ -59,12 +66,52 @@ const STUDENT_ROSTER_VISIBLE_HEADERS = ['요일', '시간', '반 이름', '학�
 const STUDENT_ROSTER_SYNC_HEADERS = [STUDENT_ID_HEADER, ...STUDENT_ROSTER_VISIBLE_HEADERS];
 const SCORE_INPUT_LOCKED_HEADERS = STUDENT_ROSTER_SYNC_HEADERS;
 const SCORE_INPUT_PROTECTION_PREFIX = '성적입력 학생명단 연동 보호';
-const DAY_SORT_ORDER = ['월', '화', '수', '목', '금', '토', '일'];
+const ROW_NOTES_KEY = '__rowNotes';
+const ROW_FORMULAS_KEY = '__rowFormulas';
+const ROW_NUMBER_KEY = '__rowNumber';
+const SCORE_ORDER_HEADER = '__학생명단순서';
+const ROSTER_ORDER_HEADER = '__학생명단반구분순서';
+const ACTIVE_CLASS_LIST_HEADER = '__활성반목록';
+const GRAMMAR_GROUP_LIST_HEADER = '__Grammar그룹목록';
+const CLASS_CONFIG_HELPER_ROW_COUNT = 1000;
+const CLASS_SORT_ORDER = [
+  'beginner1',
+  'beginner2',
+  'beginner3',
+  'beginner4',
+  'preinter1',
+  'preinter2',
+  'preinter3',
+  'preinter4',
+  'advanced1',
+  'advanced2',
+  'advanced3',
+  'advanced4',
+  'powerstation1',
+  'powerstation2',
+];
+const CLASS_DEFAULT_SCORE_HEADERS = [
+  'Vocabulary 교재명',
+  'Writing/Grammar 교재명',
+  'Reading/Listening 교재명',
+];
+const SCORE_DATA_HEADERS = [
+  ...DESIRED_SCORE_INPUT_HEADERS,
+  ...RATING_COLUMNS,
+  ...CLASS_DEFAULT_SCORE_HEADERS,
+  'Grammar 평균그룹',
+  'Grade',
+  'Writing Comment',
+  'Grammar Comment',
+  'Reading Comment',
+  'Listening Comment',
+];
+const SCORE_REMOVAL_PROTECTED_HEADERS = SCORE_DATA_HEADERS
+  .filter(header => !CLASS_DEFAULT_SCORE_HEADERS.includes(header));
 
 const DEFAULT_CLASS_HEADERS = [
   '사용여부',
   '반 이름',
-  'Grammar 평균그룹',
   '기본 Vocabulary 교재명',
   '기본 Writing/Grammar 교재명',
   '기본 Reading/Listening 교재명',
@@ -80,8 +127,6 @@ const DEFAULT_OUTPUT_SETTINGS = [
 ];
 
 function onOpen() {
-  cleanupRemovedInputColumns_();
-
   SpreadsheetApp.getUi()
     .createMenu(CONFIG.outputMenu)
     .addItem('현재 행 학생 PDF 생성', 'generateActiveRowReport')
@@ -92,11 +137,14 @@ function onOpen() {
     .addItem('선택 행 AI 코멘트 다듬기', 'polishSelectedRowsComments')
     .addItem('전체 AI 코멘트 다듬기', 'polishAllComments')
     .addSeparator()
+    .addItem('학생명단 → 성적입력 지금 동기화', 'syncRosterToScoreNow')
+    .addSeparator()
     .addItem('AI API 키 저장', 'setOpenAiApiKey')
     .addItem('필요 기능 추가/점검', 'ensureReportColumns')
     .addToUi();
 
-  refreshAutomaticDropdowns_();
+  syncStudentRosterToScoreInput_(SpreadsheetApp.getActive(), false);
+  ensureAutoSyncTrigger_();
 }
 
 function ensureReportColumns() {
@@ -132,10 +180,17 @@ function ensureReportColumns() {
   const addedClasses = ensureClassSettings_(ss, sheet);
   const validationColumns = applyRatingDropdowns_(sheet);
   const classDropdownColumns = applyClassDropdowns_(ss, sheet);
-  const spacerResult = rebuildSheetWithClassSpacers_(sheet);
+  const studentSheet = ss.getSheetByName(CONFIG.studentSheet);
+  const rosterDropdownColumns = studentSheet
+    ? applyStudentRosterDropdowns_(ss, studentSheet)
+    : [];
   const protectedColumns = applyScoreInputProtections_(sheet);
   const addedSettings = ensureOutputSettings_(ss);
   const triggerInstalled = ensureAutoSyncTrigger_();
+  const syncResult = syncStudentRosterToScoreInput_(ss, false);
+  const spacerResult = syncResult && !syncResult.blocked
+    ? { spacerCount: syncResult.spacerCount || 0 }
+    : null;
   SpreadsheetApp.getUi().alert([
     renamedHeaders.length ? `변경된 컬럼명:\n${renamedHeaders.join('\n')}` : '변경된 컬럼명 없음',
     removedHeaders.length ? `삭제된 예전 컬럼:\n${removedHeaders.join('\n')}` : '삭제된 예전 컬럼 없음',
@@ -144,12 +199,36 @@ function ensureReportColumns() {
     addedClasses.length ? `반별설정에 추가된 반:\n${addedClasses.join('\n')}` : '반별설정 추가 반 없음',
     validationColumns.length ? `드롭다운 적용:\n${validationColumns.join('\n')}` : '드롭다운 적용 대상 없음',
     classDropdownColumns.length ? `반/문법반 드롭다운 적용:\n${classDropdownColumns.join('\n')}` : '반/문법반 드롭다운 적용 대상 없음',
+    rosterDropdownColumns.length ? `학생명단 드롭다운 적용:\n${rosterDropdownColumns.join('\n')}` : '학생명단 드롭다운 적용 대상 없음',
     studentIdResult.assignedCount ? `학생ID 자동 부여: ${studentIdResult.assignedCount}명` : '학생ID 추가 부여 없음',
     spacerResult ? `반 사이 빈 행 정리: ${spacerResult.spacerCount}개` : '반 사이 빈 행 정리 대상 없음',
     protectedColumns.length ? `성적입력 보호 적용:\n${protectedColumns.join('\n')}` : '성적입력 보호 적용 대상 없음',
     addedSettings.length ? `추가된 출력설정:\n${addedSettings.join('\n')}` : '출력설정 추가 없음',
     triggerInstalled ? '자동 동기화 트리거 설치/점검 완료' : '자동 동기화 트리거 점검 건너뜀',
+    syncResult ? formatSyncResultForAlert_(syncResult) : '학생명단 동기화 건너뜀',
   ].join('\n\n'));
+}
+
+function formatSyncResultForAlert_(result) {
+  return [
+    result.blocked
+      ? '학생명단 → 성적입력 동기화 중단(성적정보 보호)'
+      : '학생명단 → 성적입력 동기화 완료',
+    `학생명단: ${result.rosterCount}명`,
+    `새로 추가: ${result.addedCount}명`,
+    `기존 갱신: ${result.updatedCount}명`,
+    result.blocked ? '' : `명단에서 빠져 제외된 기존 행: ${result.removedCount}명`,
+    result.scoreIdBackfillCount ? `기존 성적행 학생ID 자동 연결: ${result.scoreIdBackfillCount}명` : '',
+    result.clearedDefaultGrammarGroupCount
+      ? `학생별 선택을 위해 잘못된 Grammar default 정리: ${result.clearedDefaultGrammarGroupCount}명`
+      : '',
+    result.unsafeRows && result.unsafeRows.length
+      ? `성적 섞임 방지를 위해 확인 필요한 행:\n${result.unsafeRows.slice(0, 10).join('\n')}`
+      : '',
+    result.duplicateKeys && result.duplicateKeys.length
+      ? `중복 학생 키 확인 필요:\n${result.duplicateKeys.join('\n')}`
+      : '',
+  ].filter(Boolean).join('\n');
 }
 
 function renameLegacyHeaders_(sheet) {
@@ -197,50 +276,26 @@ function reorderInputColumns_(sheet, desiredHeaders) {
 }
 
 function removeLegacyHeaders_(sheet) {
-  const legacyHeaders = ["Teacher's Comment", '월', '번호'];
-  const removed = [];
-
-  for (let column = sheet.getLastColumn(); column >= 1; column -= 1) {
-    const header = stringValue_(sheet.getRange(1, column).getValue());
-    if (!legacyHeaders.includes(header)) continue;
-    sheet.deleteColumn(column);
-    removed.push(header);
-  }
-
-  return removed;
+  // 기존 입력값 보호를 위해 어떤 열도 자동 삭제하지 않는다.
+  return [];
 }
 
 function cleanupRemovedInputColumns_() {
-  const ss = SpreadsheetApp.getActive();
-  const scoreSheet = ss.getSheetByName(CONFIG.scoreSheet);
-  const studentSheet = ss.getSheetByName(CONFIG.studentSheet);
-
-  if (scoreSheet) removeColumnsByHeader_(scoreSheet, ['월', '번호']);
-  if (studentSheet) removeColumnsByHeader_(studentSheet, ['번호']);
+  return [];
 }
 
 function removeColumnsByHeader_(sheet, headersToRemove) {
-  const removed = [];
-  for (let column = sheet.getLastColumn(); column >= 1; column -= 1) {
-    const header = stringValue_(sheet.getRange(1, column).getValue());
-    if (!headersToRemove.includes(header)) continue;
-    sheet.deleteColumn(column);
-    removed.push(header);
-  }
-  return removed.reverse();
+  return [];
 }
 
 function onEdit(e) {
+  if (!AUTOMATIC_ROSTER_SYNC_ENABLED) return;
   const sheet = e && e.range ? e.range.getSheet() : null;
   if (!sheet) return;
   const ss = sheet.getParent();
 
   if (sheet.getName() === CONFIG.classConfigSheet) {
-    const scoreSheet = ss.getSheetByName(CONFIG.scoreSheet);
-    if (!scoreSheet) return;
-    applyClassDropdowns_(ss, scoreSheet);
-    const studentSheet = ss.getSheetByName(CONFIG.studentSheet);
-    if (studentSheet) applyStudentRosterDropdowns_(ss, studentSheet);
+    syncStudentRosterToScoreInput_(ss, false);
     return;
   }
 
@@ -249,35 +304,42 @@ function onEdit(e) {
     const editedHeaders = headers
       .slice(e.range.getColumn() - 1, e.range.getColumn() - 1 + e.range.getNumColumns())
       .filter(Boolean);
-    const shouldSync = editedHeaders.some(header => STUDENT_ROSTER_VISIBLE_HEADERS.includes(header));
-    applyStudentRosterDropdowns_(ss, sheet);
+    const shouldSync = editedHeaders.some(header => STUDENT_ROSTER_SYNC_HEADERS.includes(header));
+    if (shouldSync) syncStudentRosterToScoreInput_(ss, false);
+    return;
+  }
+
+  if (sheet.getName() === CONFIG.scoreSheet && e.range.getRow() > 1) {
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+    const editedHeaders = headers
+      .slice(e.range.getColumn() - 1, e.range.getColumn() - 1 + e.range.getNumColumns())
+      .filter(Boolean);
+    const shouldSync = editedHeaders.some(header => STUDENT_ROSTER_SYNC_HEADERS.includes(header));
     if (shouldSync) syncStudentRosterToScoreInput_(ss, false);
   }
 }
 
 function applyRatingDropdowns_(sheet) {
-  const lastRow = Math.max(sheet.getMaxRows(), 200);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
-  const rule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(RATING_OPTIONS, true)
-    .setAllowInvalid(false)
-    .build();
 
   const applied = [];
   RATING_COLUMNS.forEach(header => {
-    const columnIndex = headers.indexOf(header) + 1;
-    if (!columnIndex) return;
-    sheet.getRange(2, columnIndex, lastRow - 1, 1).setDataValidation(rule);
-    applied.push(header);
+    if (applyDropdownToColumn_(sheet, headers, header, RATING_OPTIONS)) {
+      applied.push(header);
+    }
   });
   return applied;
 }
 
-function ensureClassSettings_(ss, scoreSheet) {
+function ensureClassSettings_(ss, scoreSheet, migrateSchema) {
   let sheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  let wasCreated = false;
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.classConfigSheet);
     sheet.getRange(1, 1, 1, DEFAULT_CLASS_HEADERS.length).setValues([DEFAULT_CLASS_HEADERS]);
+    wasCreated = true;
+  } else if (migrateSchema !== false) {
+    migrateClassSettingsSchema_(sheet, scoreSheet);
   }
 
   const headerRange = sheet.getRange(1, 1, 1, DEFAULT_CLASS_HEADERS.length);
@@ -299,6 +361,20 @@ function ensureClassSettings_(ss, scoreSheet) {
   const existingRows = sheet.getLastRow() >= 2
     ? sheet.getRange(2, 1, sheet.getLastRow() - 1, DEFAULT_CLASS_HEADERS.length).getValues()
     : [];
+
+  if (existingRows.length) {
+    const normalizedUseValues = existingRows.map(row => {
+      const className = stringValue_(row[1]);
+      const useValue = row[0];
+      if (!className) return [useValue];
+      return [isActiveConfigRow_(useValue) ? true : useValue];
+    });
+    const hasChangedUseValue = normalizedUseValues.some((row, index) => row[0] !== existingRows[index][0]);
+    if (hasChangedUseValue) {
+      sheet.getRange(2, 1, normalizedUseValues.length, 1).setValues(normalizedUseValues);
+    }
+  }
+
   const existingClassNames = existingRows.map(row => stringValue_(row[1])).filter(Boolean);
   const existingMap = {};
   existingClassNames.forEach(name => existingMap[name] = true);
@@ -316,9 +392,11 @@ function ensureClassSettings_(ss, scoreSheet) {
     studentSheet ? collectUniqueColumnValues_(studentSheet, studentHeaders, '반 이름') : []
   );
 
-  const rowsToAdd = classNames
-    .filter(className => !existingMap[className])
-    .map(className => [true, className, '', '', '', '']);
+  const rowsToAdd = wasCreated
+    ? classNames
+      .filter(className => !existingMap[className])
+      .map(className => [true, className, '', '', ''])
+    : [];
 
   if (rowsToAdd.length) {
     sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAdd.length, DEFAULT_CLASS_HEADERS.length).setValues(rowsToAdd);
@@ -327,18 +405,43 @@ function ensureClassSettings_(ss, scoreSheet) {
   return rowsToAdd.map(row => row[1]);
 }
 
+function migrateClassSettingsSchema_(sheet, scoreSheet) {
+  if (!sheet || sheet.getLastColumn() < 1) return false;
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const grammarColumnIndex = headers.indexOf('Grammar 평균그룹') + 1;
+  if (!grammarColumnIndex) return false;
+
+  const grammarTemplate = findValidationTemplateCell_(sheet, 'Grammar 평균그룹');
+  if (grammarTemplate && scoreSheet) {
+    copyValidationTemplateToColumn_(grammarTemplate, scoreSheet, 'Grammar 평균그룹');
+  }
+
+  sheet.deleteColumn(grammarColumnIndex);
+  return true;
+}
+
 function applyClassDropdowns_(ss, sheet) {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
-  const classConfig = readClassConfig_(ss.getSheetByName(CONFIG.classConfigSheet));
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  const classConfig = readClassConfig_(classSheet);
   const classNames = classConfig.classNames;
-  if (!classNames.length) return [];
+  const classSourceRange = classSheet && classNames.length
+    ? writeClassConfigHelperList_(classSheet, ACTIVE_CLASS_LIST_HEADER, classNames)
+    : null;
 
   const applied = [];
-  if (applyDropdownToColumn_(sheet, headers, '반 이름', classNames)) {
+  if (classNames.length
+    && applyDropdownToColumn_(sheet, headers, '반 이름', classNames, classSourceRange)) {
     applied.push('반 이름');
   }
 
-  if (applyDropdownToColumn_(sheet, headers, 'Grammar 평균그룹', classConfig.grammarGroups)) {
+  const grammarGroups = buildGrammarGroupOptions_(sheet);
+  const grammarSourceRange = classSheet && grammarGroups.length
+    ? writeClassConfigHelperList_(classSheet, GRAMMAR_GROUP_LIST_HEADER, grammarGroups)
+    : null;
+  if (grammarGroups.length
+    && applyDropdownToColumn_(sheet, headers, 'Grammar 평균그룹', grammarGroups, grammarSourceRange)) {
     applied.push('Grammar 평균그룹');
   }
 
@@ -348,7 +451,6 @@ function applyClassDropdowns_(ss, sheet) {
 function readClassConfig_(sheet) {
   const config = {
     classNames: [],
-    grammarGroups: GRAMMAR_GROUP_OPTIONS.slice(),
   };
   if (!sheet || sheet.getLastRow() < 2) return config;
 
@@ -374,17 +476,59 @@ function isActiveConfigRow_(value) {
   return !['false', 'n', 'no', '0', '미사용', '중지', 'x'].includes(text);
 }
 
-function applyDropdownToColumn_(sheet, headers, header, options) {
+function applyDropdownToColumn_(sheet, headers, header, options, sourceRange) {
   const columnIndex = headers.indexOf(header) + 1;
   if (!columnIndex || !options.length) return false;
 
-  const lastRow = Math.max(sheet.getMaxRows(), 200);
-  const rule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(options, true)
+  ensureRowExists_(sheet, 2);
+  const rowCount = sheet.getMaxRows() - 1;
+  const range = sheet.getRange(2, columnIndex, rowCount, 1);
+  const validations = range.getDataValidations();
+  const templateIndex = validations.findIndex(row => row[0]);
+  const missingGroups = findMissingValidationGroups_(validations);
+  if (!missingGroups.length) return true;
+
+  if (templateIndex !== -1) {
+    const templateCell = sheet.getRange(templateIndex + 2, columnIndex);
+    missingGroups.forEach(group => {
+      templateCell.copyTo(
+        sheet.getRange(group.startRow, columnIndex, group.rowCount, 1),
+        SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION,
+        false
+      );
+    });
+    return true;
+  }
+
+  const builder = SpreadsheetApp.newDataValidation();
+  const rule = (sourceRange
+    ? builder.requireValueInRange(sourceRange, true)
+    : builder.requireValueInList(options, true))
     .setAllowInvalid(false)
     .build();
-  sheet.getRange(2, columnIndex, lastRow - 1, 1).setDataValidation(rule);
+  missingGroups.forEach(group => {
+    sheet.getRange(group.startRow, columnIndex, group.rowCount, 1).setDataValidation(rule);
+  });
   return true;
+}
+
+function findMissingValidationGroups_(validations) {
+  const groups = [];
+  let startIndex = -1;
+
+  validations.forEach((row, index) => {
+    const isMissing = !row[0];
+    if (isMissing && startIndex === -1) startIndex = index;
+    if (!isMissing && startIndex !== -1) {
+      groups.push({ startRow: startIndex + 2, rowCount: index - startIndex });
+      startIndex = -1;
+    }
+  });
+
+  if (startIndex !== -1) {
+    groups.push({ startRow: startIndex + 2, rowCount: validations.length - startIndex });
+  }
+  return groups;
 }
 
 function applyScoreInputProtections_(sheet) {
@@ -518,7 +662,7 @@ function assignMissingStudentIds_(sheet) {
     ids.push([studentId]);
   });
 
-  if (ids.length) {
+  if (assignedCount) {
     sheet.getRange(2, idColumnIndex, ids.length, 1).setValues(ids);
   }
 
@@ -527,22 +671,6 @@ function assignMissingStudentIds_(sheet) {
 
 function makeNewStudentId_() {
   return `WP-${Utilities.getUuid()}`;
-}
-
-function refreshAutomaticDropdowns_() {
-  const ss = SpreadsheetApp.getActive();
-  ensureStudentIdColumns_(ss);
-  const scoreSheet = ss.getSheetByName(CONFIG.scoreSheet);
-  const studentSheet = ss.getSheetByName(CONFIG.studentSheet);
-
-  if (scoreSheet) {
-    applyRatingDropdowns_(scoreSheet);
-    applyClassDropdowns_(ss, scoreSheet);
-    applyScoreInputProtections_(scoreSheet);
-  }
-  if (studentSheet) {
-    applyStudentRosterDropdowns_(ss, studentSheet);
-  }
 }
 
 function collectUniqueColumnValues_(sheet, headers, header) {
@@ -862,121 +990,6 @@ function writeAwardRankingSheet_(ss, rankingRows) {
   sheet.activate();
 }
 
-function rebuildSheetWithClassSpacers_(sheet) {
-  const lastColumn = sheet.getLastColumn();
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2 || lastColumn < 1) return { dataCount: 0, spacerCount: 0 };
-
-  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
-  const classColumnIndex = headers.indexOf('반 이름');
-  if (classColumnIndex === -1) return null;
-
-  const dataRowCount = lastRow - 1;
-  const dataRange = sheet.getRange(2, 1, dataRowCount, lastColumn);
-  const values = dataRange.getValues();
-  const notes = dataRange.getNotes();
-  const validations = dataRange.getDataValidations();
-
-  const entries = values
-    .map((row, index) => ({
-      row,
-      notes: notes[index],
-      validations: validations[index],
-    }))
-    .filter(entry => entry.row.some(value => stringValue_(value)));
-
-  entries.sort((a, b) => compareRosterRows_(a.row, b.row, headers));
-
-  const outputValues = [];
-  const outputNotes = [];
-  const outputValidations = [];
-  let previousGroupKey = '';
-
-  entries.forEach(entry => {
-    const rowObject = rowArrayToObject_(entry.row, headers);
-    const currentGroupKey = makeClassGroupKey_(rowObject);
-
-    if (outputValues.length && previousGroupKey && currentGroupKey && previousGroupKey !== currentGroupKey) {
-      outputValues.push(new Array(lastColumn).fill(''));
-      outputNotes.push(new Array(lastColumn).fill(''));
-      outputValidations.push(new Array(lastColumn).fill(null));
-    }
-
-    outputValues.push(entry.row);
-    outputNotes.push(entry.notes);
-    outputValidations.push(entry.validations);
-    previousGroupKey = currentGroupKey || previousGroupKey;
-  });
-
-  const requiredRows = outputValues.length + 1;
-  if (sheet.getMaxRows() < requiredRows) {
-    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
-  }
-
-  const clearRowCount = Math.max(dataRowCount, outputValues.length);
-  if (clearRowCount > 0) {
-    sheet.getRange(2, 1, clearRowCount, lastColumn)
-      .clearContent()
-      .clearNote()
-      .setBackground('#FFFFFF')
-      .setFontColor('#000000')
-      .setFontWeight('normal')
-      .setFontStyle('normal')
-      .setFontFamily('Arial')
-      .setFontSize(11)
-      .setVerticalAlignment('middle')
-      .setWrap(false);
-  }
-
-  if (outputValues.length) {
-    const outputRange = sheet.getRange(2, 1, outputValues.length, lastColumn);
-    outputRange.setValues(outputValues);
-    outputRange.setNotes(outputNotes);
-    outputRange.setDataValidations(outputValidations);
-    applyDefaultDataAlignment_(sheet, headers, outputValues.length);
-  }
-
-  return {
-    dataCount: entries.length,
-    spacerCount: outputValues.length - entries.length,
-  };
-}
-
-function applyDefaultDataAlignment_(sheet, headers, rowCount) {
-  if (!rowCount) return;
-
-  const leftAlignedHeaders = [
-    '요일',
-    '시간',
-    '반 이름',
-    '학생 이름',
-    'Vocabulary 교재명',
-    'Writing/Grammar 교재명',
-    'Reading/Listening 교재명',
-    'Grammar 평균그룹',
-    '출력여부',
-    'Grade',
-    'Writing Comment',
-    'Grammar Comment',
-    'Reading Comment',
-    'Listening Comment',
-  ];
-
-  const centerAlignedHeaders = DESIRED_SCORE_INPUT_HEADERS.concat(RATING_COLUMNS);
-
-  leftAlignedHeaders.forEach(header => {
-    const columnIndex = headers.indexOf(header) + 1;
-    if (!columnIndex) return;
-    sheet.getRange(2, columnIndex, rowCount, 1).setHorizontalAlignment('left');
-  });
-
-  centerAlignedHeaders.forEach(header => {
-    const columnIndex = headers.indexOf(header) + 1;
-    if (!columnIndex) return;
-    sheet.getRange(2, columnIndex, rowCount, 1).setHorizontalAlignment('center');
-  });
-}
-
 function rowArrayToObject_(row, headers) {
   const object = {};
   headers.forEach((header, index) => object[header] = row[index]);
@@ -988,11 +1001,20 @@ function applyStudentRosterDropdowns_(ss, sheet) {
   const options = buildRosterDropdownOptions_(ss, sheet, headers);
   const applied = [];
 
-  ['요일', '시간', '반 이름'].forEach(header => {
-    if (applyDropdownToColumn_(sheet, headers, header, options[header] || [])) {
+  ['요일', '시간'].forEach(header => {
+    if (applyDropdownToColumn_(sheet, headers, header, options[header] || [], null)) {
       applied.push(header);
     }
   });
+
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  const classNames = options['반 이름'] || [];
+  const classSourceRange = classSheet && classNames.length
+    ? writeClassConfigHelperList_(classSheet, ACTIVE_CLASS_LIST_HEADER, classNames)
+    : null;
+  if (applyDropdownToColumn_(sheet, headers, '반 이름', classNames, classSourceRange)) {
+    applied.push('반 이름');
+  }
 
   return applied;
 }
@@ -1013,25 +1035,30 @@ function buildRosterDropdownOptions_(ss, rosterSheet, rosterHeaders) {
       collectUniqueColumnValues_(rosterSheet, rosterHeaders, '시간'),
       scoreSheet ? collectUniqueColumnValues_(scoreSheet, scoreHeaders, '시간') : []
     ),
-    '반 이름': mergeUniqueValues_(
-      classConfig.classNames,
-      collectUniqueColumnValues_(rosterSheet, rosterHeaders, '반 이름'),
-      scoreSheet ? collectUniqueColumnValues_(scoreSheet, scoreHeaders, '반 이름') : []
-    ),
+    '반 이름': classConfig.classNames,
   };
 }
 
 function ensureAutoSyncTrigger_() {
   const ss = SpreadsheetApp.getActive();
   try {
-    ScriptApp.getProjectTriggers().forEach(trigger => {
+    const triggers = ScriptApp.getProjectTriggers();
+    let currentTrigger = null;
+
+    triggers.forEach(trigger => {
       const handler = trigger.getHandlerFunction();
-      if (handler === 'handleSpreadsheetChange') {
+      if (handler === AUTO_SYNC_TRIGGER_HANDLER && !currentTrigger) {
+        currentTrigger = trigger;
+        return;
+      }
+      if (handler === AUTO_SYNC_TRIGGER_HANDLER || LEGACY_SYNC_TRIGGER_HANDLERS.includes(handler)) {
         ScriptApp.deleteTrigger(trigger);
       }
     });
 
-    ScriptApp.newTrigger('handleSpreadsheetChange')
+    if (currentTrigger) return true;
+
+    ScriptApp.newTrigger(AUTO_SYNC_TRIGGER_HANDLER)
       .forSpreadsheet(ss)
       .onChange()
       .create();
@@ -1042,14 +1069,52 @@ function ensureAutoSyncTrigger_() {
   }
 }
 
-function handleSpreadsheetChange(e) {
+function syncRosterToScoreNow() {
   const ss = SpreadsheetApp.getActive();
+  ensureAutoSyncTrigger_();
+  const result = syncStudentRosterToScoreInput_(ss, true, 30000);
+  if (!result) return;
+  SpreadsheetApp.getUi().alert(formatSyncResultForAlert_(result));
+}
+
+function handleSpreadsheetChange(e) {
+  if (!AUTOMATIC_ROSTER_SYNC_ENABLED) return;
+  const ss = e && e.source ? e.source : SpreadsheetApp.getActive();
   const changeType = e && e.changeType ? e.changeType : '';
   const syncChangeTypes = ['INSERT_ROW', 'REMOVE_ROW', 'INSERT_COLUMN', 'REMOVE_COLUMN'];
   if (!syncChangeTypes.includes(changeType)) return;
+
+  if (hasRosterScoreMembershipDifference_(ss)) {
+    syncStudentRosterToScoreInput_(ss, false, 30000);
+    return;
+  }
+
   const activeSheet = ss.getActiveSheet();
-  if (!activeSheet || activeSheet.getName() !== CONFIG.studentSheet) return;
-  syncStudentRosterToScoreInput_(ss, false);
+  if (!activeSheet) return;
+  const activeSheetName = activeSheet.getName();
+  if (activeSheetName === CONFIG.classConfigSheet) {
+    const rosterSheet = ss.getSheetByName(CONFIG.studentSheet);
+    const scoreSheet = ss.getSheetByName(CONFIG.scoreSheet);
+    if (rosterSheet && scoreSheet) refreshClassDropdownSources_(ss, rosterSheet, scoreSheet);
+    return;
+  }
+}
+
+function hasRosterScoreMembershipDifference_(ss) {
+  const rosterSheet = ss && ss.getSheetByName(CONFIG.studentSheet);
+  const scoreSheet = ss && ss.getSheetByName(CONFIG.scoreSheet);
+  if (!rosterSheet || !scoreSheet) return false;
+
+  const rosterKeys = readObjects_(rosterSheet, CONFIG.studentSheet)
+    .filter(row => stringValue_(row['학생 이름']))
+    .map(makeStudentKey_)
+    .sort();
+  const scoreKeys = readObjects_(scoreSheet, CONFIG.scoreSheet)
+    .filter(row => stringValue_(row['학생 이름']))
+    .map(makeStudentKey_)
+    .sort();
+  if (rosterKeys.length !== scoreKeys.length) return true;
+  return rosterKeys.some((key, index) => key !== scoreKeys[index]);
 }
 
 function ensureReportColumnsSilently_(ss) {
@@ -1057,8 +1122,6 @@ function ensureReportColumnsSilently_(ss) {
   if (!scoreSheet) return;
 
   ensureStudentIdColumns_(ss);
-  renameLegacyHeaders_(scoreSheet);
-  removeLegacyHeaders_(scoreSheet);
   const headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(stringValue_);
   const missing = DESIRED_INPUT_HEADERS.filter(header => !headers.includes(header));
   if (missing.length) {
@@ -1071,34 +1134,48 @@ function ensureReportColumnsSilently_(ss) {
       .setHorizontalAlignment('center')
       .setWrap(true);
   }
-  reorderInputColumns_(scoreSheet, DESIRED_INPUT_HEADERS);
   hideHeaderColumn_(scoreSheet, STUDENT_ID_HEADER);
-  ensureClassSettings_(ss, scoreSheet);
-  ensureOutputSettings_(ss);
-  applyRatingDropdowns_(scoreSheet);
-  applyClassDropdowns_(ss, scoreSheet);
-  applyScoreInputProtections_(scoreSheet);
 }
 
-function syncStudentRosterToScoreInput_(ss, showAlertOnError) {
+function syncStudentRosterToScoreInput_(ss, showAlertOnError, lockWaitMs) {
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  const waitMs = Number.isFinite(lockWaitMs) ? lockWaitMs : 10000;
+  if (!lock.tryLock(waitMs)) {
+    const message = '다른 동기화가 진행 중입니다. 잠시 후 다시 실행하세요.';
+    if (showAlertOnError) SpreadsheetApp.getUi().alert(message);
+    else ss.toast(message, '성적입력 동기화', 5);
+    return null;
+  }
+
+  try {
+    return syncStudentRosterToScoreInputUnlocked_(ss, showAlertOnError);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function syncStudentRosterToScoreInputUnlocked_(ss, showAlertOnError) {
   const rosterSheet = ss.getSheetByName(CONFIG.studentSheet);
   const scoreSheet = ss.getSheetByName(CONFIG.scoreSheet);
-  const ui = SpreadsheetApp.getUi();
   if (!rosterSheet || !scoreSheet) {
     if (showAlertOnError) {
+      const ui = SpreadsheetApp.getUi();
       ui.alert(`'${CONFIG.studentSheet}' 또는 '${CONFIG.scoreSheet}' 탭을 찾지 못했습니다.`);
     }
     return null;
   }
 
-  ensureStudentIdColumns_(ss);
   ensureReportColumnsSilently_(ss);
-  rebuildSheetWithClassSpacers_(rosterSheet);
-  applyStudentRosterDropdowns_(ss, rosterSheet);
+  ensureClassSettings_(ss, scoreSheet, false);
+  resetScoreOrderColumn_(scoreSheet);
+  const clearedDefaultGrammarGroupCount = clearLegacyDefaultGrammarGroups_(scoreSheet);
+  refreshClassDropdownSources_(ss, rosterSheet, scoreSheet);
+  const rosterArrangeResult = arrangeStudentRosterWithClassSpacers_(rosterSheet);
 
   const rosterRows = readObjects_(rosterSheet, CONFIG.studentSheet)
     .filter(row => stringValue_(row['학생 이름']));
-  const scoreRows = readObjects_(scoreSheet, CONFIG.scoreSheet)
+  const scoreIdBackfillCount = backfillScoreStudentIdsFromRoster_(rosterRows, scoreSheet);
+  const scoreRows = readScoreObjectsWithNotes_(scoreSheet)
     .filter(row => stringValue_(row['학생 이름']));
   const duplicateKeys = findDuplicateStudentKeys_(rosterRows);
 
@@ -1116,13 +1193,13 @@ function syncStudentRosterToScoreInput_(ss, showAlertOnError) {
 
   const rosterKeyMap = {};
   const usedExistingRowIndexes = {};
-  const newRows = [];
+  const matchedRows = [];
+  const newRosterRows = [];
   let addedCount = 0;
   let updatedCount = 0;
 
   rosterRows.forEach(rosterRow => {
     const key = makeStudentKey_(rosterRow);
-    const name = stringValue_(rosterRow['학생 이름']);
     if (!key || rosterKeyMap[key]) return;
     rosterKeyMap[key] = true;
 
@@ -1130,44 +1207,764 @@ function syncStudentRosterToScoreInput_(ss, showAlertOnError) {
     const existing = match ? match.row : null;
     if (match) usedExistingRowIndexes[match.index] = true;
 
-    if (existing) updatedCount += 1;
-    else addedCount += 1;
-
-    const merged = Object.assign({}, existing || {});
-    STUDENT_ROSTER_SYNC_HEADERS.forEach(header => {
-      merged[header] = rosterRow[header];
-    });
-    if (!stringValue_(merged['출력여부'])) merged['출력여부'] = true;
-    newRows.push(merged);
+    if (existing) {
+      matchedRows.push({ rowNumber: existing[ROW_NUMBER_KEY], rosterRow });
+      updatedCount += 1;
+    } else {
+      newRosterRows.push(rosterRow);
+      addedCount += 1;
+    }
   });
 
+  const unsafeRows = findUnsafeUnmatchedScoreRows_(scoreRows, usedExistingRowIndexes, rosterRows);
+  if (unsafeRows.length) {
+    notifySyncSafetyIssue_(ss, showAlertOnError, unsafeRows);
+    return {
+      rosterCount: rosterRows.length,
+      addedCount,
+      updatedCount,
+      removedCount: 0,
+      scoreIdBackfillCount,
+      clearedDefaultGrammarGroupCount,
+      spacerCount: rosterArrangeResult.spacerCount,
+      duplicateKeys,
+      blocked: true,
+      unsafeRows,
+    };
+  }
+
+  const unmatchedScoreRows = scoreRows.filter((row, index) => !usedExistingRowIndexes[index]);
+  const removedCount = clearUnmatchedScoreRows_(scoreSheet, unmatchedScoreRows);
   const scoreHeaders = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(stringValue_);
-  const outputValues = newRows.map(row => scoreHeaders.map(header => row[header] === undefined ? '' : row[header]));
-  const dataRowCount = Math.max(scoreSheet.getLastRow() - 1, 0);
-  if (dataRowCount) {
-    scoreSheet.getRange(2, 1, dataRowCount, scoreSheet.getLastColumn()).clearContent().clearNote();
-  }
-  if (outputValues.length) {
-    scoreSheet.getRange(2, 1, outputValues.length, scoreHeaders.length).setValues(outputValues);
-  }
+  updateScoreStudentInfoRows_(scoreSheet, scoreHeaders, matchedRows);
+  appendScoreRowsFromRoster_(ss, scoreSheet, scoreHeaders, newRosterRows);
+  fillBlankScoreDefaultsFromClassSettings_(ss, scoreSheet);
 
-  applyRatingDropdowns_(scoreSheet);
-  applyClassDropdowns_(ss, scoreSheet);
-  rebuildSheetWithClassSpacers_(scoreSheet);
-
-  const removedCount = scoreRows.filter((row, index) => {
-    if (usedExistingRowIndexes[index]) return false;
-    const key = makeStudentKey_(row);
-    return key && !rosterKeyMap[key];
-  }).length;
+  const arrangeResult = arrangeScoreInputLikeRoster_(scoreSheet, rosterRows);
 
   return {
     rosterCount: rosterRows.length,
     addedCount,
     updatedCount,
     removedCount,
+    scoreIdBackfillCount,
+    clearedDefaultGrammarGroupCount,
+    spacerCount: rosterArrangeResult.spacerCount,
+    scoreSpacerCount: arrangeResult.spacerCount,
     duplicateKeys,
   };
+}
+
+function readScoreObjectsWithNotes_(sheet) {
+  if (!sheet) throw new Error(`'${CONFIG.scoreSheet}' 탭을 찾지 못했습니다.`);
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  if (values.length < 2) return [];
+
+  const notes = range.getNotes();
+  const formulas = range.getFormulas();
+  const headers = values[0].map(stringValue_);
+
+  return values.slice(1).map((row, rowIndex) => {
+    const object = {};
+    const rowNotes = {};
+    const rowFormulas = {};
+    headers.forEach((header, columnIndex) => {
+      object[header] = row[columnIndex];
+      const note = stringValue_(notes[rowIndex + 1][columnIndex]);
+      const formula = stringValue_(formulas[rowIndex + 1][columnIndex]);
+      if (header && note) rowNotes[header] = note;
+      if (header && formula) rowFormulas[header] = formula;
+    });
+    object[ROW_NOTES_KEY] = rowNotes;
+    object[ROW_FORMULAS_KEY] = rowFormulas;
+    object[ROW_NUMBER_KEY] = rowIndex + 2;
+    return object;
+  }).filter(row => headers.some(header => stringValue_(row[header])));
+}
+
+function updateScoreStudentInfoRows_(sheet, headers, matches) {
+  if (!matches.length || sheet.getLastRow() < 2) return;
+
+  const rowCount = sheet.getLastRow() - 1;
+  STUDENT_ROSTER_SYNC_HEADERS.forEach(header => {
+    const columnIndex = headers.indexOf(header) + 1;
+    if (!columnIndex) return;
+
+    const range = sheet.getRange(2, columnIndex, rowCount, 1);
+    const values = range.getValues();
+    let changed = false;
+    matches.forEach(match => {
+      const valueIndex = match.rowNumber - 2;
+      if (valueIndex < 0 || valueIndex >= values.length) return;
+      const nextValue = match.rosterRow[header] === undefined ? '' : match.rosterRow[header];
+      if (stringValue_(values[valueIndex][0]) === stringValue_(nextValue)) return;
+      values[valueIndex][0] = nextValue;
+      changed = true;
+    });
+    if (changed) range.setValues(values);
+  });
+
+  const outputColumnIndex = headers.indexOf('출력여부') + 1;
+  if (!outputColumnIndex) return;
+
+  const outputRange = sheet.getRange(2, outputColumnIndex, rowCount, 1);
+  const outputValues = outputRange.getValues();
+  let outputChanged = false;
+  matches.forEach(match => {
+    const valueIndex = match.rowNumber - 2;
+    if (valueIndex < 0 || valueIndex >= outputValues.length) return;
+    if (stringValue_(outputValues[valueIndex][0])) return;
+    outputValues[valueIndex][0] = true;
+    outputChanged = true;
+  });
+  if (outputChanged) outputRange.setValues(outputValues);
+}
+
+function appendScoreRowsFromRoster_(ss, sheet, headers, rosterRows) {
+  if (!rosterRows.length) return;
+
+  const outputValues = rosterRows.map(rosterRow => {
+    const classDefaults = getClassDefaultsForRosterRow_(ss, rosterRow);
+    const rowObject = Object.assign({}, classDefaults);
+    STUDENT_ROSTER_SYNC_HEADERS.forEach(header => {
+      rowObject[header] = rosterRow[header];
+    });
+    rowObject['출력여부'] = true;
+    return headers.map(header => rowObject[header] === undefined ? '' : rowObject[header]);
+  });
+
+  const startRow = sheet.getLastRow() + 1;
+  ensureRowExists_(sheet, startRow + outputValues.length - 1);
+  sheet.getRange(startRow, 1, outputValues.length, headers.length).setValues(outputValues);
+}
+
+function getClassDefaultsForRosterRow_(ss, rosterRow) {
+  const className = stringValue_(rosterRow['반 이름']);
+  if (!className) return {};
+
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  if (!classSheet || classSheet.getLastRow() < 2) return {};
+
+  const rows = readObjects_(classSheet, CONFIG.classConfigSheet);
+  const match = rows.find(row => isActiveConfigRow_(row['사용여부']) && stringValue_(row['반 이름']) === className);
+  if (!match) return {};
+
+  return {
+    'Vocabulary 교재명': match['기본 Vocabulary 교재명'],
+    'Writing/Grammar 교재명': match['기본 Writing/Grammar 교재명'],
+    'Reading/Listening 교재명': match['기본 Reading/Listening 교재명'],
+  };
+}
+
+function arrangeStudentRosterWithClassSpacers_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return { dataCount: 0, spacerCount: 0 };
+
+  const orderColumnIndex = ensureOrderColumn_(sheet, ROSTER_ORDER_HEADER);
+  const lastColumn = sheet.getLastColumn();
+  const rowCount = Math.max(sheet.getLastRow() - 1, 0);
+  if (!rowCount) return { dataCount: 0, spacerCount: 0 };
+
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
+  const dataRange = sheet.getRange(2, 1, rowCount, lastColumn);
+  const values = dataRange.getValues();
+  const formulas = dataRange.getFormulas();
+  const notes = dataRange.getNotes();
+  const dataEntries = [];
+  const blankRowIndexes = [];
+  const currentTokens = [];
+
+  values.forEach((row, rowIndex) => {
+    const hasPersistentContent = row.some((value, columnIndex) => {
+      if (columnIndex === orderColumnIndex - 1) return false;
+      return stringValue_(value)
+        || stringValue_(formulas[rowIndex][columnIndex])
+        || stringValue_(notes[rowIndex][columnIndex]);
+    });
+    if (!hasPersistentContent) {
+      blankRowIndexes.push(rowIndex);
+      currentTokens.push('blank');
+      return;
+    }
+
+    currentTokens.push(`row:${rowIndex}`);
+    dataEntries.push({
+      rowIndex,
+      rowObject: rowArrayToObject_(row, headers),
+    });
+  });
+
+  dataEntries.sort((left, right) => {
+    const classComparison = compareClassNamesForSort_(
+      left.rowObject['반 이름'],
+      right.rowObject['반 이름']
+    );
+    return classComparison || left.rowIndex - right.rowIndex;
+  });
+
+  const spacerOrders = [];
+  dataEntries.forEach((entry, index) => {
+    const nextEntry = dataEntries[index + 1];
+    if (!nextEntry) return;
+
+    const currentGroup = makeClassGroupKey_(entry.rowObject);
+    const nextGroup = makeClassGroupKey_(nextEntry.rowObject);
+    const hasClassNames = stringValue_(entry.rowObject['반 이름'])
+      && stringValue_(nextEntry.rowObject['반 이름']);
+    if (hasClassNames && currentGroup !== nextGroup) {
+      spacerOrders.push((index + 1) * 2);
+    }
+  });
+
+  const spacerAfterDataIndexes = {};
+  spacerOrders.forEach(order => spacerAfterDataIndexes[(order / 2) - 1] = true);
+  const desiredTokens = [];
+  dataEntries.forEach((entry, index) => {
+    desiredTokens.push(`row:${entry.rowIndex}`);
+    if (spacerAfterDataIndexes[index]) desiredTokens.push('blank');
+  });
+  if (JSON.stringify(currentTokens) === JSON.stringify(desiredTokens)) {
+    return {
+      dataCount: dataEntries.length,
+      spacerCount: spacerOrders.length,
+    };
+  }
+
+  const missingBlankCount = Math.max(spacerOrders.length - blankRowIndexes.length, 0);
+  const extendedRowCount = rowCount + missingBlankCount;
+  ensureRowExists_(sheet, extendedRowCount + 1);
+
+  const helperValues = Array.from({ length: extendedRowCount }, () => ['']);
+  dataEntries.forEach((entry, index) => {
+    helperValues[entry.rowIndex][0] = index * 2 + 1;
+  });
+  blankRowIndexes.forEach((rowIndex, index) => {
+    helperValues[rowIndex][0] = index < spacerOrders.length
+      ? spacerOrders[index]
+      : dataEntries.length * 2 + index + 1;
+  });
+  for (let index = 0; index < missingBlankCount; index += 1) {
+    helperValues[rowCount + index][0] = spacerOrders[blankRowIndexes.length + index];
+  }
+
+  sheet.getRange(2, orderColumnIndex, extendedRowCount, 1).setValues(helperValues);
+  sheet.getRange(2, 1, extendedRowCount, lastColumn)
+    .sort({ column: orderColumnIndex, ascending: true });
+  sheet.getRange(2, orderColumnIndex, extendedRowCount, 1)
+    .setValues(Array.from({ length: extendedRowCount }, () => ['']));
+  sheet.hideColumns(orderColumnIndex);
+
+  return {
+    dataCount: dataEntries.length,
+    spacerCount: spacerOrders.length,
+  };
+}
+
+function arrangeScoreInputLikeRoster_(sheet, rosterRows) {
+  if (!sheet || sheet.getLastRow() < 2 || !rosterRows.length) return { dataCount: 0, spacerCount: 0 };
+
+  const orderColumnIndex = ensureScoreOrderColumn_(sheet);
+  const lastColumn = sheet.getLastColumn();
+  const rowCount = Math.max(sheet.getLastRow() - 1, 0);
+  if (!rowCount) return { dataCount: 0, spacerCount: 0 };
+
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
+  const dataRange = sheet.getRange(2, 1, rowCount, lastColumn);
+  const values = dataRange.getValues();
+  const formulas = dataRange.getFormulas();
+  const notes = dataRange.getNotes();
+  const rosterOrderByKey = {};
+
+  rosterRows.forEach((row, index) => {
+    const key = makeStudentKey_(row);
+    if (key && rosterOrderByKey[key] === undefined) rosterOrderByKey[key] = index + 1;
+  });
+
+  const dataEntries = [];
+  const blankRowIndexes = [];
+  const currentTokens = [];
+  values.forEach((row, rowIndex) => {
+    const hasPersistentContent = row.some((value, columnIndex) => {
+      if (columnIndex === orderColumnIndex - 1) return false;
+      return stringValue_(value)
+        || stringValue_(formulas[rowIndex][columnIndex])
+        || stringValue_(notes[rowIndex][columnIndex]);
+    });
+    if (!hasPersistentContent) {
+      blankRowIndexes.push(rowIndex);
+      currentTokens.push('blank');
+      return;
+    }
+
+    currentTokens.push(`row:${rowIndex}`);
+    const rowObject = rowArrayToObject_(row, headers);
+    const key = makeStudentKey_(rowObject);
+    const rosterOrder = rosterOrderByKey[key];
+    dataEntries.push({
+      rowIndex,
+      rowObject,
+      order: rosterOrder === undefined ? rosterRows.length + rowIndex + 1 : rosterOrder,
+    });
+  });
+
+  dataEntries.sort((left, right) => {
+    if (left.order !== right.order) return left.order - right.order;
+    return left.rowIndex - right.rowIndex;
+  });
+
+  const spacerOrders = [];
+  dataEntries.forEach((entry, index) => {
+    const nextEntry = dataEntries[index + 1];
+    if (!nextEntry) return;
+
+    const currentClass = stringValue_(entry.rowObject['반 이름']);
+    const nextClass = stringValue_(nextEntry.rowObject['반 이름']);
+    const currentGroup = makeClassGroupKey_(entry.rowObject);
+    const nextGroup = makeClassGroupKey_(nextEntry.rowObject);
+    if (currentClass && nextClass && currentGroup !== nextGroup) {
+      spacerOrders.push((index + 1) * 2);
+    }
+  });
+
+  const spacerAfterDataIndexes = {};
+  spacerOrders.forEach(order => spacerAfterDataIndexes[(order / 2) - 1] = true);
+  const desiredTokens = [];
+  dataEntries.forEach((entry, index) => {
+    desiredTokens.push(`row:${entry.rowIndex}`);
+    if (spacerAfterDataIndexes[index]) desiredTokens.push('blank');
+  });
+  if (JSON.stringify(currentTokens) === JSON.stringify(desiredTokens)) {
+    return {
+      dataCount: dataEntries.length,
+      spacerCount: spacerOrders.length,
+    };
+  }
+
+  const missingBlankCount = Math.max(spacerOrders.length - blankRowIndexes.length, 0);
+  const extendedRowCount = rowCount + missingBlankCount;
+  ensureRowExists_(sheet, extendedRowCount + 1);
+
+  const helperValues = Array.from({ length: extendedRowCount }, () => ['']);
+  dataEntries.forEach((entry, index) => {
+    helperValues[entry.rowIndex][0] = index * 2 + 1;
+  });
+
+  blankRowIndexes.forEach((rowIndex, index) => {
+    helperValues[rowIndex][0] = index < spacerOrders.length
+      ? spacerOrders[index]
+      : dataEntries.length * 2 + index + 1;
+  });
+
+  for (let index = 0; index < missingBlankCount; index += 1) {
+    helperValues[rowCount + index][0] = spacerOrders[blankRowIndexes.length + index];
+  }
+
+  sheet.getRange(2, orderColumnIndex, extendedRowCount, 1).setValues(helperValues);
+  sheet.getRange(2, 1, extendedRowCount, lastColumn)
+    .sort({ column: orderColumnIndex, ascending: true });
+  sheet.getRange(2, orderColumnIndex, extendedRowCount, 1)
+    .setValues(Array.from({ length: extendedRowCount }, () => ['']));
+  sheet.hideColumns(orderColumnIndex);
+
+  return {
+    dataCount: dataEntries.length,
+    spacerCount: spacerOrders.length,
+  };
+}
+
+function ensureScoreOrderColumn_(sheet) {
+  return ensureOrderColumn_(sheet, SCORE_ORDER_HEADER);
+}
+
+function ensureOrderColumn_(sheet, header) {
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
+  let columnIndex = headers.indexOf(header) + 1;
+
+  if (!columnIndex) {
+    columnIndex = sheet.getLastColumn() + 1;
+    sheet.getRange(1, columnIndex).setValue(header);
+  }
+
+  sheet.hideColumns(columnIndex);
+  return columnIndex;
+}
+
+function resetScoreOrderColumn_(sheet) {
+  if (!sheet) return;
+  const columnIndex = ensureScoreOrderColumn_(sheet);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  const range = sheet.getRange(2, columnIndex, lastRow - 1, 1);
+  const values = range.getValues();
+  if (!values.some(row => stringValue_(row[0]))) return;
+  range.setValues(Array.from({ length: lastRow - 1 }, () => ['']));
+}
+
+function ensureRowExists_(sheet, rowNumber) {
+  if (rowNumber <= sheet.getMaxRows()) return;
+  sheet.insertRowsAfter(sheet.getMaxRows(), rowNumber - sheet.getMaxRows());
+}
+
+function refreshClassDropdownSources_(ss, rosterSheet, scoreSheet) {
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  if (!classSheet) return null;
+
+  normalizeConfiguredClassNames_(classSheet, [rosterSheet, scoreSheet]);
+  const config = readClassConfig_(classSheet);
+  const grammarGroups = buildGrammarGroupOptions_(scoreSheet);
+  return {
+    classSheet,
+    classHelperRange: writeClassConfigHelperList_(classSheet, ACTIVE_CLASS_LIST_HEADER, config.classNames),
+    grammarHelperRange: writeClassConfigHelperList_(classSheet, GRAMMAR_GROUP_LIST_HEADER, grammarGroups),
+  };
+}
+
+function normalizeConfiguredClassNames_(classSheet, sheets) {
+  if (!classSheet || classSheet.getLastRow() < 2) return 0;
+
+  const canonicalByKey = {};
+  const ambiguousKeys = {};
+  readClassConfig_(classSheet).classNames.forEach(className => {
+    const key = className.toLowerCase();
+    if (canonicalByKey[key] && canonicalByKey[key] !== className) {
+      ambiguousKeys[key] = true;
+      return;
+    }
+    canonicalByKey[key] = className;
+  });
+  Object.keys(ambiguousKeys).forEach(key => delete canonicalByKey[key]);
+
+  let changedCount = 0;
+  (sheets || []).forEach(sheet => {
+    if (!sheet || sheet.getLastRow() < 2) return;
+
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+    const classColumnIndex = headers.indexOf('반 이름') + 1;
+    const nameColumnIndex = headers.indexOf('학생 이름') + 1;
+    if (!classColumnIndex || !nameColumnIndex) return;
+
+    const rowCount = sheet.getLastRow() - 1;
+    const classRange = sheet.getRange(2, classColumnIndex, rowCount, 1);
+    const classValues = classRange.getValues();
+    const nameValues = sheet.getRange(2, nameColumnIndex, rowCount, 1).getValues();
+    let changedStartIndex = -1;
+
+    for (let index = 0; index <= rowCount; index += 1) {
+      let isChanged = false;
+      if (index < rowCount && stringValue_(nameValues[index][0])) {
+        const currentName = stringValue_(classValues[index][0]);
+        const canonicalName = canonicalByKey[currentName.toLowerCase()];
+        if (canonicalName && canonicalName !== currentName) {
+          classValues[index][0] = canonicalName;
+          changedCount += 1;
+          isChanged = true;
+        }
+      }
+
+      if (isChanged && changedStartIndex === -1) {
+        changedStartIndex = index;
+        continue;
+      }
+      if (isChanged || changedStartIndex === -1) continue;
+
+      sheet.getRange(changedStartIndex + 2, classColumnIndex, index - changedStartIndex, 1)
+        .setValues(classValues.slice(changedStartIndex, index));
+      changedStartIndex = -1;
+    }
+  });
+
+  return changedCount;
+}
+
+function buildGrammarGroupOptions_(scoreSheet) {
+  if (!scoreSheet || scoreSheet.getLastColumn() < 1) return GRAMMAR_GROUP_OPTIONS.slice();
+
+  const headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(stringValue_);
+  return mergeUniqueValues_(
+    GRAMMAR_GROUP_OPTIONS,
+    collectUniqueColumnValues_(scoreSheet, headers, 'Grammar 평균그룹')
+  ).filter(value => value.toLowerCase() !== 'default');
+}
+
+function clearLegacyDefaultGrammarGroups_(scoreSheet) {
+  if (!scoreSheet || scoreSheet.getLastRow() < 2) return 0;
+
+  const headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const columnIndex = headers.indexOf('Grammar 평균그룹') + 1;
+  if (!columnIndex) return 0;
+
+  const rowCount = scoreSheet.getLastRow() - 1;
+  const range = scoreSheet.getRange(2, columnIndex, rowCount, 1);
+  const values = range.getValues();
+  let clearedCount = 0;
+  values.forEach(row => {
+    if (stringValue_(row[0]).toLowerCase() !== 'default') return;
+    row[0] = '';
+    clearedCount += 1;
+  });
+  if (clearedCount) range.setValues(values);
+  return clearedCount;
+}
+
+function writeClassConfigHelperList_(sheet, header, values) {
+  const columnIndex = ensureHeaderColumn_(sheet, header);
+  sheet.hideColumns(columnIndex);
+
+  const rowCount = Math.max(CLASS_CONFIG_HELPER_ROW_COUNT, values.length, 1);
+  ensureRowExists_(sheet, rowCount + 1);
+  const outputValues = Array.from({ length: rowCount }, (_, index) => [values[index] || '']);
+  const range = sheet.getRange(2, columnIndex, rowCount, 1);
+  const currentValues = range.getValues();
+  let changedStartIndex = -1;
+
+  for (let index = 0; index <= rowCount; index += 1) {
+    const isChanged = index < rowCount
+      && stringValue_(currentValues[index][0]) !== stringValue_(outputValues[index][0]);
+    if (isChanged && changedStartIndex === -1) {
+      changedStartIndex = index;
+      continue;
+    }
+    if (isChanged || changedStartIndex === -1) continue;
+
+    const changedRowCount = index - changedStartIndex;
+    sheet.getRange(changedStartIndex + 2, columnIndex, changedRowCount, 1)
+      .setValues(outputValues.slice(changedStartIndex, index));
+    changedStartIndex = -1;
+  }
+
+  return range;
+}
+
+function findValidationTemplateCell_(sheet, header) {
+  if (!sheet || sheet.getLastColumn() < 1) return null;
+  ensureRowExists_(sheet, 2);
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const columnIndex = headers.indexOf(header) + 1;
+  if (!columnIndex) return null;
+
+  const activeRange = sheet.getActiveRange();
+  if (activeRange && activeRange.getLastRow() > 1
+    && activeRange.getColumn() <= columnIndex
+    && activeRange.getLastColumn() >= columnIndex) {
+    const activeCell = sheet.getRange(Math.max(activeRange.getRow(), 2), columnIndex);
+    if (activeCell.getDataValidation()) return activeCell;
+  }
+
+  const validations = sheet.getRange(2, columnIndex, sheet.getMaxRows() - 1, 1).getDataValidations();
+  const sourceIndex = validations.findIndex(row => row[0]);
+  return sourceIndex === -1 ? null : sheet.getRange(sourceIndex + 2, columnIndex);
+}
+
+function copyValidationTemplateToColumn_(templateCell, targetSheet, targetHeader) {
+  if (!templateCell || !targetSheet || targetSheet.getLastColumn() < 1) return false;
+  ensureRowExists_(targetSheet, 2);
+
+  const headers = targetSheet.getRange(1, 1, 1, targetSheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const columnIndex = headers.indexOf(targetHeader) + 1;
+  if (!columnIndex) return false;
+
+  templateCell.copyTo(
+    targetSheet.getRange(2, columnIndex, targetSheet.getMaxRows() - 1, 1),
+    SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION,
+    false
+  );
+  return true;
+}
+
+function fillBlankScoreDefaultsFromClassSettings_(ss, scoreSheet) {
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  if (!classSheet || !scoreSheet || scoreSheet.getLastRow() < 2) return 0;
+
+  const configRows = readObjects_(classSheet, CONFIG.classConfigSheet);
+  const defaultsByClass = {};
+  configRows.forEach(row => {
+    if (!isActiveConfigRow_(row['사용여부'])) return;
+    const className = stringValue_(row['반 이름']);
+    if (className && !defaultsByClass[className]) defaultsByClass[className] = row;
+  });
+
+  const lastColumn = scoreSheet.getLastColumn();
+  const rowCount = scoreSheet.getLastRow() - 1;
+  const headers = scoreSheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
+  const values = scoreSheet.getRange(2, 1, rowCount, lastColumn).getValues();
+  const classColumnIndex = headers.indexOf('반 이름');
+  const nameColumnIndex = headers.indexOf('학생 이름');
+  if (classColumnIndex === -1 || nameColumnIndex === -1) return 0;
+
+  const mappings = [
+    { configHeader: '기본 Vocabulary 교재명', scoreHeader: 'Vocabulary 교재명' },
+    { configHeader: '기본 Writing/Grammar 교재명', scoreHeader: 'Writing/Grammar 교재명' },
+    { configHeader: '기본 Reading/Listening 교재명', scoreHeader: 'Reading/Listening 교재명' },
+  ];
+
+  let changedCount = 0;
+  mappings.forEach(mapping => {
+    const targetColumnIndex = headers.indexOf(mapping.scoreHeader);
+    if (targetColumnIndex === -1) return;
+
+    let columnChanged = false;
+    values.forEach(row => {
+      if (!stringValue_(row[nameColumnIndex]) || stringValue_(row[targetColumnIndex])) return;
+      const classDefaults = defaultsByClass[stringValue_(row[classColumnIndex])];
+      const defaultValue = classDefaults ? classDefaults[mapping.configHeader] : '';
+      if (!stringValue_(defaultValue)) return;
+      row[targetColumnIndex] = defaultValue;
+      changedCount += 1;
+      columnChanged = true;
+    });
+
+    if (columnChanged) {
+      scoreSheet.getRange(2, targetColumnIndex + 1, rowCount, 1)
+        .setValues(values.map(row => [row[targetColumnIndex]]));
+    }
+  });
+  return changedCount;
+}
+
+function findUnsafeUnmatchedScoreRows_(scoreRows, usedExistingRowIndexes, rosterRows) {
+  return scoreRows.map((row, index) => ({ row, index }))
+    .filter(entry => {
+      if (usedExistingRowIndexes[entry.index]) return false;
+      return hasProtectedScoreData_(entry.row);
+    })
+    .map(entry => formatScoreRowForSafetyAlert_(entry.row, entry.row[ROW_NUMBER_KEY] || entry.index + 2));
+}
+
+function clearUnmatchedScoreRows_(sheet, rows) {
+  if (!sheet || !rows || !rows.length) return 0;
+
+  const rowNumbers = rows
+    .map(row => Number(row[ROW_NUMBER_KEY]))
+    .filter(rowNumber => Number.isFinite(rowNumber) && rowNumber >= 2)
+    .sort((left, right) => left - right);
+  if (!rowNumbers.length) return 0;
+
+  const groups = [];
+  rowNumbers.forEach(rowNumber => {
+    const currentGroup = groups[groups.length - 1];
+    if (currentGroup && rowNumber === currentGroup.endRow + 1) {
+      currentGroup.endRow = rowNumber;
+      return;
+    }
+    groups.push({ startRow: rowNumber, endRow: rowNumber });
+  });
+
+  const columnCount = sheet.getLastColumn();
+  groups.forEach(group => {
+    const range = sheet.getRange(
+      group.startRow,
+      1,
+      group.endRow - group.startRow + 1,
+      columnCount
+    );
+    range.clearContent();
+    range.clearNote();
+  });
+  return rowNumbers.length;
+}
+
+function hasProtectedScoreData_(row) {
+  const notes = row[ROW_NOTES_KEY] || {};
+  const formulas = row[ROW_FORMULAS_KEY] || {};
+  return SCORE_REMOVAL_PROTECTED_HEADERS.some(header => (
+    stringValue_(row[header])
+    || stringValue_(notes[header])
+    || stringValue_(formulas[header])
+  ));
+}
+
+function formatScoreRowForSafetyAlert_(row, rowNumber) {
+  return [
+    `${rowNumber}행`,
+    stringValue_(row['학생 이름']),
+    stringValue_(row['요일']),
+    stringValue_(row['시간']),
+    stringValue_(row['반 이름']),
+  ].filter(Boolean).join(' / ');
+}
+
+function notifySyncSafetyIssue_(ss, showAlertOnError, unsafeRows) {
+  const message = [
+    '성적정보 보호를 위해 동기화를 중단했습니다.',
+    '기존 성적행을 학생명단의 학생과 안전하게 연결하지 못했습니다.',
+    '아래 행을 확인한 뒤 다시 동기화하세요.',
+    unsafeRows.slice(0, 10).join('\n'),
+  ].filter(Boolean).join('\n');
+
+  if (showAlertOnError) {
+    SpreadsheetApp.getUi().alert(message);
+    return;
+  }
+
+  try {
+    ss.toast(message, '성적입력 동기화 중단', 10);
+  } catch (error) {
+    console.warn(message);
+  }
+}
+
+function backfillScoreStudentIdsFromRoster_(rosterRows, scoreSheet) {
+  if (!scoreSheet || !rosterRows.length || scoreSheet.getLastRow() < 2) return 0;
+
+  const headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const idColumnIndex = headers.indexOf(STUDENT_ID_HEADER) + 1;
+  if (!idColumnIndex) return 0;
+
+  const rosterByVisibleKey = {};
+  const visibleKeyCounts = {};
+  const rosterByName = {};
+  const nameCounts = {};
+
+  rosterRows.forEach(row => {
+    const studentId = stringValue_(row[STUDENT_ID_HEADER]);
+    const studentName = stringValue_(row['학생 이름']);
+    if (!studentId) return;
+
+    const visibleKey = makeStudentVisibleKey_(row);
+    if (visibleKey) {
+      visibleKeyCounts[visibleKey] = (visibleKeyCounts[visibleKey] || 0) + 1;
+      rosterByVisibleKey[visibleKey] = studentId;
+    }
+
+    if (studentName) {
+      nameCounts[studentName] = (nameCounts[studentName] || 0) + 1;
+      rosterByName[studentName] = studentId;
+    }
+  });
+
+  const rowCount = scoreSheet.getLastRow() - 1;
+  const values = scoreSheet.getRange(2, 1, rowCount, scoreSheet.getLastColumn()).getValues();
+  const outputIds = [];
+  let changedCount = 0;
+
+  values.forEach(row => {
+    const rowObject = rowArrayToObject_(row, headers);
+    let studentId = stringValue_(rowObject[STUDENT_ID_HEADER]);
+
+    if (!studentId && stringValue_(rowObject['학생 이름'])) {
+      const visibleKey = makeStudentVisibleKey_(rowObject);
+      const studentName = stringValue_(rowObject['학생 이름']);
+
+      if (visibleKey && visibleKeyCounts[visibleKey] === 1) {
+        studentId = rosterByVisibleKey[visibleKey];
+      } else if (studentName && nameCounts[studentName] === 1) {
+        studentId = rosterByName[studentName];
+      }
+
+      if (studentId) changedCount += 1;
+    }
+
+    outputIds.push([studentId]);
+  });
+
+  if (changedCount) {
+    scoreSheet.getRange(2, idColumnIndex, outputIds.length, 1).setValues(outputIds);
+  }
+
+  return changedCount;
 }
 
 function findBestExistingScoreRow_(rosterRow, scoreRows, existingByKey, existingByName, usedExistingRowIndexes) {
@@ -1180,8 +1977,18 @@ function findBestExistingScoreRow_(rosterRow, scoreRows, existingByKey, existing
     }
   }
 
+  const visibleKey = makeStudentVisibleKey_(rosterRow);
+  for (let i = 0; i < scoreRows.length; i += 1) {
+    if (usedExistingRowIndexes[i]) continue;
+    if (makeStudentVisibleKey_(scoreRows[i]) === visibleKey) {
+      return { row: scoreRows[i], index: i };
+    }
+  }
+
   const name = stringValue_(rosterRow['학생 이름']);
   const candidates = existingByName[name] || [];
+  if (candidates.length !== 1) return null;
+
   let best = null;
 
   candidates.forEach(candidate => {
@@ -1209,40 +2016,6 @@ function calculateExistingRowMatchScore_(rosterRow, scoreRow) {
 function countFilledReportFields_(row) {
   const reportHeaders = DESIRED_INPUT_HEADERS.filter(header => !STUDENT_ROSTER_SYNC_HEADERS.includes(header));
   return reportHeaders.reduce((count, header) => count + (stringValue_(row[header]) ? 1 : 0), 0);
-}
-
-function compareRosterRows_(a, b, headers) {
-  const sortHeaders = ['요일', '시간', '반 이름', '학생 이름'];
-  for (let i = 0; i < sortHeaders.length; i += 1) {
-    const header = sortHeaders[i];
-    const columnIndex = headers.indexOf(header);
-    if (columnIndex === -1) continue;
-
-    const left = stringValue_(a[columnIndex]);
-    const right = stringValue_(b[columnIndex]);
-    let comparison = 0;
-    if (header === '요일') {
-      comparison = compareDayValues_(left, right);
-    } else {
-      comparison = left.localeCompare(right, 'ko');
-    }
-    if (comparison !== 0) return comparison;
-  }
-  return 0;
-}
-
-function compareDayValues_(left, right) {
-  const leftIndex = daySortIndex_(left);
-  const rightIndex = daySortIndex_(right);
-  if (leftIndex !== rightIndex) return leftIndex - rightIndex;
-  return left.localeCompare(right, 'ko');
-}
-
-function daySortIndex_(value) {
-  const text = stringValue_(value);
-  if (!text) return 999;
-  const firstDay = DAY_SORT_ORDER.find(day => text.includes(day));
-  return firstDay ? DAY_SORT_ORDER.indexOf(firstDay) : 998;
 }
 
 function generateReports_(targetRows, ctx) {
@@ -1306,16 +2079,15 @@ function buildReportData_(studentRow, ctx) {
     const score = parseScore_(studentRow[subject.scoreColumn]);
     if (score === null) return null;
 
-    const basisColumn = getAverageBasisColumn_(subject);
-    const basisValue = stringValue_(studentRow[basisColumn]);
-    const average = calculateAverage_(ctx.scoreRows, subject.scoreColumn, basisColumn, basisValue);
+    const averageGroup = getAverageGroupInfo_(studentRow, subject);
+    const average = calculateSubjectAverage_(ctx.scoreRows, subject, averageGroup.key);
 
     return {
       name: subject.name || subject.key,
       score,
       average,
-      basisColumn,
-      basisValue,
+      basisColumn: averageGroup.basisColumn,
+      basisValue: averageGroup.basisValue,
       comment: stringValue_(studentRow[subject.commentColumn]),
     };
   }).filter(Boolean);
@@ -1341,8 +2113,22 @@ function buildReportData_(studentRow, ctx) {
   };
 }
 
-function getAverageBasisColumn_(subject) {
-  return subject.key === 'Grammar' ? 'Grammar 평균그룹' : '반 이름';
+function getAverageGroupInfo_(row, subject) {
+  const className = stringValue_(row['반 이름']);
+  if (subject.key !== 'Grammar') {
+    return {
+      key: className ? `class:${className}` : '',
+      basisColumn: '반 이름',
+      basisValue: className,
+    };
+  }
+
+  const grammarGroup = stringValue_(row['Grammar 평균그룹']);
+  return {
+    key: grammarGroup && grammarGroup.toLowerCase() !== 'default' ? `grammar:${grammarGroup}` : '',
+    basisColumn: 'Grammar 평균그룹',
+    basisValue: grammarGroup.toLowerCase() === 'default' ? '' : grammarGroup,
+  };
 }
 
 function ensureOutputSettings_(ss) {
@@ -1377,11 +2163,11 @@ function renderReportHtml_(report) {
   return template.evaluate().getContent();
 }
 
-function calculateAverage_(rows, scoreColumn, basisColumn, basisValue) {
-  if (!basisValue) return null;
+function calculateSubjectAverage_(rows, subject, averageGroupKey) {
+  if (!averageGroupKey) return null;
   const scores = rows
-    .filter(row => stringValue_(row[basisColumn]) === basisValue)
-    .map(row => parseScore_(row[scoreColumn]))
+    .filter(row => getAverageGroupInfo_(row, subject).key === averageGroupKey)
+    .map(row => parseScore_(row[subject.scoreColumn]))
     .filter(score => score !== null);
   if (!scores.length) return null;
   return Math.round((scores.reduce((acc, score) => acc + score, 0) / scores.length) * 10) / 10;
@@ -1591,6 +2377,10 @@ function makeStudentKey_(row) {
   const studentId = stringValue_(row[STUDENT_ID_HEADER]);
   if (studentId) return `ID:${studentId}`;
 
+  return makeStudentVisibleKey_(row);
+}
+
+function makeStudentVisibleKey_(row) {
   return STUDENT_ROSTER_VISIBLE_HEADERS
     .map(header => stringValue_(row[header]))
     .join('||');
@@ -1602,6 +2392,25 @@ function makeClassGroupKey_(row) {
     stringValue_(row['시간']),
     stringValue_(row['반 이름']),
   ].join('||');
+}
+
+function compareClassNamesForSort_(leftValue, rightValue) {
+  const leftName = normalizeClassNameForSort_(leftValue);
+  const rightName = normalizeClassNameForSort_(rightValue);
+  const leftIndex = CLASS_SORT_ORDER.indexOf(leftName);
+  const rightIndex = CLASS_SORT_ORDER.indexOf(rightName);
+  const leftRank = leftIndex === -1 ? CLASS_SORT_ORDER.length : leftIndex;
+  const rightRank = rightIndex === -1 ? CLASS_SORT_ORDER.length : rightIndex;
+
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  if (leftIndex !== -1) return 0;
+  return leftName.localeCompare(rightName, 'en', { numeric: true, sensitivity: 'base' });
+}
+
+function normalizeClassNameForSort_(value) {
+  return stringValue_(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9가-힣]/g, '');
 }
 
 function findDuplicateStudentKeys_(rows) {
