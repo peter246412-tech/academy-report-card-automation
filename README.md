@@ -16,8 +16,8 @@ _All screens use anonymized demonstration data. No real student information is s
 
 ```mermaid
 flowchart TD
-    A[Teacher updates the student roster] --> B[Safe ID-based synchronization]
-    B --> C[Score-entry sheet in academy class order]
+    A[Teacher manages students in the score-entry sheet] --> C[Single source of truth in academy class order]
+    B[Optional safe bulk roster import] --> C
     C --> D[Teacher enters scores and comments]
     D --> E[Calculate class and grammar-group averages]
     E --> F[Generate PDF reports in Google Drive]
@@ -44,11 +44,12 @@ This project was built to help teachers generate report cards faster, reduce man
 
 ## What This System Does
 
-- Synchronizes roster additions, edits, moves, and removals with the score-entry sheet
+- Uses `성적입력` as the single source for student information and assessment data
+- Safely merges a pasted four-column roster without deleting existing score rows
 - Uses stable student IDs so data follows the student rather than a visual row position
-- Protects entered scores, comments, notes, and formulas when a roster match is uncertain
-- Keeps both operational sheets in the academy's class sequence: Beginner, Pre-Inter, Advanced, and PowerStation
-- Preserves existing Google Sheets dropdown styling during routine synchronization
+- Never deletes, clears, sorts, or rewrites entered scores, ratings, grades, or comments during roster updates
+- Stops ambiguous same-name matches instead of attaching data to an uncertain student
+- Preserves existing Google Sheets dropdown styling during roster imports
 - Generates individual PDF report cards from Google Sheets data
 - Supports 2-subject and 4-subject report formats automatically
 - Compares each student's score with the relevant class or grammar-group average
@@ -58,16 +59,17 @@ This project was built to help teachers generate report cards faster, reduce man
 - Allows report title, output month, folder name, and file naming rules to be changed from a settings sheet
 - Creates a class-by-class award ranking sheet sorted by total score
 - Logs generated PDF results and Drive links
+- Validates score ranges and required report fields before creating each PDF
 
 ## Main Workflow
 
-1. Staff maintain class defaults in `반별설정` and students in `학생명단`.
-2. Roster changes are synchronized automatically to `성적입력`; a manual sync menu remains as a recovery option.
-3. Teachers enter scores, ratings, and comments in `성적입력`.
-4. The menu `성적표 생성 > 필요 기능 추가/점검` validates the sheet structure and installs the required trigger.
-5. Teachers generate one student's PDF or all rows marked for output.
-6. The system saves reports to Google Drive and records the result in `생성로그`.
-7. Teachers generate `시상순위` directly from the completed score data.
+1. Staff maintain active classes and textbook defaults in `반별설정`.
+2. Staff manage students and class placement directly in `성적입력`.
+3. For a full roster update, staff paste day, time, class, and student name into the safe-import dialog.
+4. The import updates only student information, adds new students, and preserves every existing assessment field.
+5. Departing students are marked `퇴원`; their assessment data remains stored but is excluded from batch output.
+6. Teachers run `출력 전 입력 점검`, then generate PDFs and award rankings.
+7. The system saves reports to Google Drive and records results in `생성로그`.
 
 ## Key Features
 
@@ -113,22 +115,23 @@ Teachers can update operational data without editing code:
 - `반별설정`: active class list and class-related defaults
 - `출력설정`: report title, output month, folder name, and file name rule
 
-### Roster Synchronization and Data Safety
+### Single-Sheet Roster Management and Data Safety
 
-The roster and score-entry sheet are intentionally separated: staff manage identity and class placement in `학생명단`, while teachers work with assessment data in `성적입력`.
+The final workflow removes the separate roster dependency. Staff manage identity, class placement, and assessment data in `성적입력`, so there is no automatic two-sheet synchronization that can rewrite teacher work.
 
-The synchronization layer makes that separation reliable:
+The optional roster-import command is deliberately non-destructive:
 
-- A hidden `학생ID` is assigned once and used as the primary match key.
-- Existing score rows are updated in place, preserving assessment data.
-- New roster students receive score rows and class-level textbook defaults.
-- Removed students are cleared automatically only when no protected assessment data exists.
-- If scores, comments, notes, or formulas would be orphaned, synchronization stops and identifies the rows that require review.
-- A document lock prevents overlapping automatic and manual synchronization runs.
+- Existing students are matched only by a unique exact name and receive only day, time, class, name, and enrollment status updates.
+- New students receive new score rows and class-level textbook defaults.
+- Score, rating, grade, grammar-group, textbook, and comment cells are never cleared by roster import.
+- A `퇴원` status disables batch output without deleting the student's history.
+- Students missing from a pasted list remain in `성적입력` until staff explicitly mark them as `퇴원`.
+- Ambiguous same-name matches are reported for review rather than guessed.
+- A document lock prevents overlapping imports.
 
 ### Operational Class Ordering
 
-Both `학생명단` and `성적입력` use the same normalized class order:
+The class settings screen uses the academy's normalized curriculum order:
 
 ```text
 Beginner 1-4
@@ -137,7 +140,7 @@ Advanced 1-4
 PowerStation 1-2
 ```
 
-Spaces, hyphens, and capitalization are normalized for comparison. Blank separator rows are inserted between class groups without making row position part of student identity.
+Spaces, hyphens, and capitalization are normalized for comparison. New class names found in the roster are added to `반별설정` with blank textbook defaults.
 
 ## Technology
 
@@ -147,11 +150,11 @@ Spaces, hyphens, and capitalization are normalized for comparison. Blank separat
 - Google Drive PDF export
 - OpenAI Responses API for optional teacher-comment polishing
 - Script Properties for API-key storage
-- Installable spreadsheet triggers and Apps Script locking
+- Simple spreadsheet edit handling and Apps Script locking
 
 ## Files
 
-- `Code.gs`: synchronization, data safeguards, menus, PDF generation, averages, AI comments, and ranking logic
+- `Code.gs`: roster import, data safeguards, menus, PDF generation, averages, AI comments, and ranking logic
 - `ReportTemplate.html`: HTML/CSS template for the PDF report card
 - `PORTFOLIO_CASE_STUDY.md`: detailed problem-solving and iteration record
 - `업데이트_이용방법.md`: operational setup guide for applying updates in Apps Script
@@ -163,21 +166,21 @@ Spaces, hyphens, and capitalization are normalized for comparison. Blank separat
 
 An early cleanup routine revealed that spreadsheet row positions are not reliable identities. Rows move whenever classes are sorted or separator rows are inserted, so a position-based update could associate assessment data with the wrong student.
 
-I redesigned the model around hidden, persistent student IDs. Legacy rows are backfilled only when a unique visible match or unique name makes the association safe. This changed the synchronization contract from "same row" to "same student."
+I redesigned the model around hidden, persistent student IDs. Legacy rows are connected only when an ID or unique student name makes the association safe. This changed the synchronization contract from "same row" to "same student."
 
-### 2. Making Deletion Conservative
+### 2. Removing Destructive Synchronization
 
-A roster deletion should remove an unused score row, but it should never silently erase completed assessment work. I separated class defaults from protected score data and added checks for values, cell notes, and formulas. Clean rows can be removed automatically; rows containing teacher work stop the sync and produce a review list.
+Real use showed that even a guarded delete path was too risky for a score workbook. I removed automatic two-sheet synchronization and made `성적입력` the single source of truth. The optional bulk import may add students and update basic identity fields, but it never deletes or reorders score rows. Departures are represented as an explicit `퇴원` state.
 
 ### 3. Fixing a Dropdown-Color Regression
 
 An intermediate version refreshed data-validation rules during every sync. In Google Sheets, that also rebuilt the dropdown presentation and turned carefully assigned class colors white. I traced the problem to synchronization doing two unrelated jobs: moving data and rebuilding UI rules.
 
-The final version isolates routine roster synchronization from validation-rule setup. Automatic change handling responds only to structural membership changes, while formatting events are ignored. Dropdown setup remains an explicit maintenance operation, so class colors survive normal roster edits.
+The final version isolates optional roster import from validation-rule setup. Old installable change triggers are removed during setup, and normal student edits happen directly in `성적입력`. Dropdown setup and sheet formatting remain explicit maintenance operations.
 
 ### 4. Creating a Deterministic Academy Class Order
 
-Alphabetical sorting placed `PowerStation` before `Pre-Inter` and did not match the academy's teaching progression. I introduced an explicit domain order and a normalization function that handles variants such as `Pre-Inter 1`, `Pre-Inter1`, and differences in capitalization. The score sheet then mirrors the roster order through student IDs.
+Alphabetical sorting placed `PowerStation` before `Pre-Inter` and did not match the academy's teaching progression. I introduced an explicit domain order and a normalization function that handles variants such as `Pre-Inter 1`, `Pre-Inter1`, and differences in capitalization. Class settings use this order without sorting score rows that contain teacher work.
 
 The detailed iteration record is available in [PORTFOLIO_CASE_STUDY.md](PORTFOLIO_CASE_STUDY.md).
 
