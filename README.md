@@ -65,10 +65,10 @@ This project was built to help teachers generate report cards faster, reduce man
 
 1. Staff maintain active classes and textbook defaults in `반별설정`.
 2. Staff manage students and class placement directly in `성적입력`.
-3. For a full roster update, staff paste day, time, class, and student name into the safe-import dialog.
-4. The import updates only student information, adds new students, and preserves every existing assessment field.
-5. Departing students are marked `퇴원`; their assessment data remains stored but is excluded from batch output.
-6. Teachers run `출력 전 입력 점검`, then generate PDFs and award rankings.
+3. Staff add students from the menu; completed rows move to the end of the selected class as intact rows.
+4. Changing an existing student's class moves the full row, preserving scores, ratings, books, and comments.
+5. Departing students are permanently removed after an explicit menu confirmation or by selecting `퇴원`.
+6. Teachers generate PDFs, polish comments, and create award rankings from the menu.
 7. The system saves reports to Google Drive and records results in `생성로그`.
 
 ## Key Features

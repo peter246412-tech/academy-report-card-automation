@@ -96,7 +96,7 @@ I separated one-time roster import from sheet setup and removed the installable 
 - Old installable change triggers are removed during setup.
 - Roster import never sorts, deletes, or rebuilds completed assessment data.
 - Dropdown setup and sheet formatting run through explicit maintenance commands.
-- A manual `명단 붙여넣어 안전 반영` command handles bulk roster changes.
+- Student rows are now managed directly in `성적입력`; class changes move the intact row to the target class block.
 
 The result removes the failure-prone automatic behavior while keeping existing class colors intact.
 

@@ -57,7 +57,6 @@ const DESIRED_INPUT_HEADERS = [
   'Writing/Grammar 교재명',
   'Reading/Listening 교재명',
   'Grammar 평균그룹',
-  '출력여부',
   'Grade',
   'Writing Comment',
   'Grammar Comment',
@@ -126,28 +125,39 @@ const DEFAULT_OUTPUT_SETTINGS = [
 ];
 
 function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu(CONFIG.outputMenu)
-    .addItem('학생 추가', 'addScoreInputRows')
-    .addItem('선택 학생 삭제(퇴원 보관)', 'deactivateSelectedStudents')
-    .addSeparator()
-    .addItem('선택 행 학생 PDF 생성', 'generateSelectedRowReports')
-    .addItem('전체 학생 PDF 생성', 'generateAllReports')
-    .addSeparator()
-    .addItem('시상 순위표 생성', 'generateAwardRankingSheet')
-    .addSeparator()
-    .addItem('선택 행 AI 코멘트 다듬기', 'polishSelectedRowsComments')
-    .addItem('전체 AI 코멘트 다듬기', 'polishAllComments')
-    .addSeparator()
-    .addItem('새 반 추가', 'addClassSetting')
-    .addItem('반 이름 수정', 'renameClassSetting')
-    .addItem('반 삭제', 'deleteClassSetting')
-    .addSeparator()
-    .addItem('AI API 키 저장', 'setOpenAiApiKey')
-    .addToUi();
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu(CONFIG.outputMenu)
+      .addItem('학생 추가', 'addScoreInputRows')
+      .addItem('선택 학생 완전 삭제', 'deactivateSelectedStudents')
+      .addSeparator()
+      .addItem('선택 행 학생 PDF 생성', 'generateSelectedRowReports')
+      .addItem('전체 학생 PDF 생성', 'generateAllReports')
+      .addSeparator()
+      .addItem('시상 순위표 생성', 'generateAwardRankingSheet')
+      .addSeparator()
+      .addItem('선택 행 AI 코멘트 다듬기', 'polishSelectedRowsComments')
+      .addItem('전체 AI 코멘트 다듬기', 'polishAllComments')
+      .addSeparator()
+      .addItem('새 반 추가', 'addClassSetting')
+      .addItem('반 이름 수정', 'renameClassSetting')
+      .addItem('반 삭제', 'deleteClassSetting')
+      .addSeparator()
+      .addItem('AI API 키 저장', 'setOpenAiApiKey')
+      .addToUi();
+  } catch (error) {
+    console.error(`메뉴 생성 실패: ${error.message}`);
+  }
 
-  const scoreSheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.scoreSheet);
-  if (scoreSheet) scoreSheet.setFrozenColumns(SCORE_INPUT_FROZEN_COLUMN_COUNT);
+  try {
+    const scoreSheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.scoreSheet);
+    if (scoreSheet) {
+      removeOutputColumn_(scoreSheet);
+      scoreSheet.setFrozenColumns(SCORE_INPUT_FROZEN_COLUMN_COUNT);
+    }
+  } catch (error) {
+    console.error(`성적입력 초기화 실패: ${error.message}`);
+  }
 }
 
 function ensureReportColumns() {
@@ -160,6 +170,7 @@ function ensureReportColumns() {
 
   const studentIdResult = ensureStudentIdColumns_(ss);
   const renamedHeaders = renameLegacyHeaders_(sheet);
+  const removedOutputColumn = removeOutputColumn_(sheet);
   const removedHeaders = removeLegacyHeaders_(sheet);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
   const requiredColumns = DESIRED_INPUT_HEADERS;
@@ -189,6 +200,7 @@ function ensureReportColumns() {
   const removedTriggers = removeLegacySyncTriggers_();
   SpreadsheetApp.getUi().alert([
     renamedHeaders.length ? `변경된 컬럼명:\n${renamedHeaders.join('\n')}` : '변경된 컬럼명 없음',
+    removedOutputColumn ? '출력여부 컬럼 삭제 완료' : '출력여부 컬럼 없음',
     removedHeaders.length ? `삭제된 예전 컬럼:\n${removedHeaders.join('\n')}` : '삭제된 예전 컬럼 없음',
     missing.length ? `추가된 성적입력 컬럼:\n${missing.join('\n')}` : '성적입력 컬럼 추가 없음',
     reorderedHeaders.length ? `정렬된 컬럼:\n${reorderedHeaders.join('\n')}` : '컬럼 순서 변경 없음',
@@ -261,6 +273,15 @@ function removeLegacyHeaders_(sheet) {
   return [];
 }
 
+function removeOutputColumn_(sheet) {
+  if (!sheet || sheet.getLastColumn() < 1) return false;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const columnIndex = headers.indexOf('출력여부') + 1;
+  if (!columnIndex) return false;
+  sheet.deleteColumn(columnIndex);
+  return true;
+}
+
 function cleanupRemovedInputColumns_() {
   return [];
 }
@@ -285,6 +306,10 @@ function onEdit(e) {
     const editedHeaders = headers
       .slice(e.range.getColumn() - 1, e.range.getColumn() - 1 + e.range.getNumColumns())
       .filter(Boolean);
+    if (editedHeaders.includes(ENROLLMENT_STATUS_HEADER)
+      && deleteWithdrawnRows_(sheet, e.range.getRow(), e.range.getNumRows())) {
+      return;
+    }
     if (editedHeaders.includes('학생 이름')) {
       assignMissingStudentIds_(sheet);
       fillBlankEnrollmentStatuses_(sheet);
@@ -293,7 +318,219 @@ function onEdit(e) {
       ensureClassSettings_(ss, sheet);
       applyClassDropdowns_(ss, sheet);
     }
+    if (editedHeaders.includes('학생 이름') || editedHeaders.includes('반 이름')) {
+      organizeStudentRowsSafely_(
+        sheet,
+        e.range.getRow(),
+        e.range.getNumRows(),
+        true
+      );
+    }
   }
+}
+
+function deleteWithdrawnRows_(sheet, startRow, rowCount) {
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const nameColumnIndex = headers.indexOf('학생 이름') + 1;
+  const statusColumnIndex = headers.indexOf(ENROLLMENT_STATUS_HEADER) + 1;
+  if (!nameColumnIndex || !statusColumnIndex) return 0;
+
+  const firstRow = Math.max(startRow, 2);
+  const lastRow = Math.min(startRow + rowCount - 1, sheet.getLastRow());
+  if (lastRow < firstRow) return 0;
+  const values = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, sheet.getLastColumn()).getValues();
+  const rowsToDelete = values.map((row, index) => (
+    stringValue_(row[nameColumnIndex - 1])
+      && stringValue_(row[statusColumnIndex - 1]) === '퇴원'
+      ? firstRow + index
+      : 0
+  )).filter(Boolean).sort((left, right) => right - left);
+  if (!rowsToDelete.length) return 0;
+
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    sheet.getParent().toast('다른 학생 작업이 진행 중입니다. 잠시 후 다시 시도하세요.', '학생 삭제', 5);
+    return 0;
+  }
+
+  try {
+    rowsToDelete.forEach(rowNumber => sheet.deleteRow(rowNumber));
+    normalizeClassSpacerRows_(sheet);
+    sheet.getParent().toast(`퇴원 학생 ${rowsToDelete.length}명의 행을 완전히 삭제했습니다.`, '학생 삭제', 5);
+    return rowsToDelete.length;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function organizeStudentRowsSafely_(sheet, startRow, rowCount, moveToClassEnd) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const classColumnIndex = headers.indexOf('반 이름') + 1;
+  const nameColumnIndex = headers.indexOf('학생 이름') + 1;
+  const idColumnIndex = headers.indexOf(STUDENT_ID_HEADER) + 1;
+  if (!classColumnIndex || !nameColumnIndex || !idColumnIndex) return false;
+
+  const firstRow = Math.max(startRow, 2);
+  const lastRow = Math.min(startRow + rowCount - 1, sheet.getLastRow());
+  if (lastRow < firstRow) return false;
+  const editedRows = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, sheet.getLastColumn()).getValues();
+  const studentIds = editedRows.map(row => {
+    if (!stringValue_(row[classColumnIndex - 1]) || !stringValue_(row[nameColumnIndex - 1])) return '';
+    return stringValue_(row[idColumnIndex - 1]);
+  }).filter(Boolean);
+  if (!studentIds.length) return false;
+
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    sheet.getParent().toast('다른 학생 행을 정리 중입니다. 잠시 후 반을 다시 선택하세요.', '학생 행 정리', 5);
+    return false;
+  }
+
+  try {
+    const remainingStudentIds = new Set(studentIds);
+    studentIds.forEach(studentId => {
+      const rowNumber = findStudentRowById_(sheet, idColumnIndex, studentId);
+      if (rowNumber) organizeStudentRow_(sheet, rowNumber, moveToClassEnd, remainingStudentIds);
+      remainingStudentIds.delete(studentId);
+    });
+    normalizeClassSpacerRows_(sheet);
+    return true;
+  } catch (error) {
+    console.error(error);
+    sheet.getParent().toast(
+      `학생 행을 자동 이동하지 못했습니다. 입력값은 유지됩니다. (${error.message})`,
+      '학생 행 정리',
+      8
+    );
+    return false;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function findStudentRowById_(sheet, idColumnIndex, studentId) {
+  if (!sheet || !idColumnIndex || !studentId || sheet.getLastRow() < 2) return 0;
+  const ids = sheet.getRange(2, idColumnIndex, sheet.getLastRow() - 1, 1).getValues();
+  const rowOffset = ids.findIndex(row => stringValue_(row[0]) === studentId);
+  return rowOffset === -1 ? 0 : rowOffset + 2;
+}
+
+function organizeStudentRow_(sheet, rowNumber, moveToClassEnd, excludedStudentIds) {
+  if (!sheet || rowNumber < 2 || rowNumber > sheet.getLastRow()) return false;
+
+  const lastColumn = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
+  const classColumnIndex = headers.indexOf('반 이름') + 1;
+  const nameColumnIndex = headers.indexOf('학생 이름') + 1;
+  const idColumnIndex = headers.indexOf(STUDENT_ID_HEADER) + 1;
+  if (!classColumnIndex || !nameColumnIndex || !idColumnIndex) return false;
+
+  const studentName = stringValue_(sheet.getRange(rowNumber, nameColumnIndex).getValue());
+  const className = stringValue_(sheet.getRange(rowNumber, classColumnIndex).getValue());
+  if (!studentName || !className) return false;
+
+  const rowCount = sheet.getLastRow() - 1;
+  const classValues = sheet.getRange(2, classColumnIndex, rowCount, 1).getValues();
+  const nameValues = sheet.getRange(2, nameColumnIndex, rowCount, 1).getValues();
+  const idValues = sheet.getRange(2, idColumnIndex, rowCount, 1).getValues();
+  const students = [];
+  for (let index = 0; index < rowCount; index += 1) {
+    if (!stringValue_(nameValues[index][0])) continue;
+    students.push({
+      rowNumber: index + 2,
+      className: stringValue_(classValues[index][0]),
+      studentId: stringValue_(idValues[index][0]),
+    });
+  }
+
+  const currentIndex = students.findIndex(student => student.rowNumber === rowNumber);
+  if (currentIndex === -1) return false;
+  const previousStudent = students[currentIndex - 1];
+  const nextStudent = students[currentIndex + 1];
+  const isAlreadyInClassBlock = (previousStudent && previousStudent.className === className)
+    || (nextStudent && nextStudent.className === className);
+  if (!moveToClassEnd && isAlreadyInClassBlock) return false;
+
+  const targetRows = students
+    .filter(student => (
+      student.rowNumber !== rowNumber
+      && student.className === className
+      && (!excludedStudentIds || !excludedStudentIds.has(student.studentId))
+    ))
+    .map(student => student.rowNumber);
+  if (!targetRows.length) return false;
+
+  const targetLastRow = Math.max(...targetRows);
+  if (targetLastRow + 1 === rowNumber) return false;
+  sheet.moveRows(
+    sheet.getRange(rowNumber, 1, 1, 1),
+    targetLastRow + 1
+  );
+  return true;
+}
+
+function normalizeClassSpacerRows_(sheet) {
+  if (!sheet || sheet.getLastRow() < 3) return 0;
+
+  const lastColumn = sheet.getLastColumn();
+  const rowCount = sheet.getLastRow() - 1;
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
+  const classColumnIndex = headers.indexOf('반 이름');
+  const nameColumnIndex = headers.indexOf('학생 이름');
+  if (classColumnIndex === -1 || nameColumnIndex === -1) return 0;
+
+  const range = sheet.getRange(2, 1, rowCount, lastColumn);
+  const values = range.getValues();
+  const formulas = range.getFormulas();
+  const notes = range.getNotes();
+  const students = [];
+
+  values.forEach((row, index) => {
+    if (!stringValue_(row[nameColumnIndex])) return;
+    students.push({
+      rowNumber: index + 2,
+      className: stringValue_(row[classColumnIndex]),
+    });
+  });
+
+  const operations = [];
+  for (let index = 0; index < students.length - 1; index += 1) {
+    const current = students[index];
+    const next = students[index + 1];
+    const gapCount = next.rowNumber - current.rowNumber - 1;
+    const desiredGapCount = current.className !== next.className ? 1 : 0;
+    if (gapCount === desiredGapCount) continue;
+
+    let gapContainsData = false;
+    for (let rowNumber = current.rowNumber + 1; rowNumber < next.rowNumber; rowNumber += 1) {
+      const dataIndex = rowNumber - 2;
+      const hasPersistentContent = values[dataIndex].some((value, columnIndex) => (
+        stringValue_(value)
+        || stringValue_(formulas[dataIndex][columnIndex])
+        || stringValue_(notes[dataIndex][columnIndex])
+      ));
+      if (hasPersistentContent) {
+        gapContainsData = true;
+        break;
+      }
+    }
+    if (gapContainsData) continue;
+
+    operations.push({
+      rowNumber: current.rowNumber,
+      difference: desiredGapCount - gapCount,
+    });
+  }
+
+  operations.sort((left, right) => right.rowNumber - left.rowNumber).forEach(operation => {
+    if (operation.difference > 0) {
+      sheet.insertRowsAfter(operation.rowNumber, operation.difference);
+    } else if (operation.difference < 0) {
+      sheet.deleteRows(operation.rowNumber + 1, -operation.difference);
+    }
+  });
+  return operations.length;
 }
 
 function resetPastedRosterStatuses_(sheet, editedRange) {
@@ -320,15 +557,6 @@ function applyStudentControlColumns_(sheet) {
     applied.push(ENROLLMENT_STATUS_HEADER);
   }
 
-  const outputColumnIndex = headers.indexOf('출력여부') + 1;
-  if (outputColumnIndex) {
-    ensureRowExists_(sheet, 2);
-    const outputRange = sheet.getRange(2, outputColumnIndex, sheet.getMaxRows() - 1, 1);
-    const existingValues = outputRange.getValues();
-    outputRange.insertCheckboxes();
-    outputRange.setValues(existingValues);
-    applied.push('출력여부');
-  }
   return applied;
 }
 
@@ -603,38 +831,37 @@ function deleteClassSetting() {
   const className = stringValue_(response.getResponseText());
   const classKey = normalizeClassNameForSort_(className);
   const rows = readAndNormalizeClassSettingsRows_(classSheet);
-  const target = rows.find(row => normalizeClassNameForSort_(row[1]) === classKey);
-  if (!target) {
+  const targetIndex = rows.findIndex(row => normalizeClassNameForSort_(row[1]) === classKey);
+  if (targetIndex === -1) {
     ui.alert(`'${className}' 반을 찾지 못했습니다.`);
     return;
   }
 
-  const activeStudents = scoreSheet
+  const classStudents = scoreSheet
     ? readObjects_(scoreSheet, CONFIG.scoreSheet).filter(row => (
       normalizeClassNameForSort_(row['반 이름']) === classKey
       && stringValue_(row['학생 이름'])
-      && isActiveEnrollment_(row)
     ))
     : [];
-  if (activeStudents.length) {
+  if (classStudents.length) {
     ui.alert([
-      `'${className}' 반에 재원 학생 ${activeStudents.length}명이 있어 삭제할 수 없습니다.`,
-      '먼저 성적입력에서 해당 학생을 다른 반으로 옮기거나 퇴원 처리하세요.',
+      `'${className}' 반에 학생 ${classStudents.length}명이 있어 삭제할 수 없습니다.`,
+      '먼저 성적입력에서 해당 학생을 다른 반으로 옮기거나 완전히 삭제하세요.',
     ].join('\n'));
     return;
   }
 
   const confirmation = ui.alert(
-    '반 삭제 확인',
-    `'${className}' 반을 드롭다운에서 제외할까요?\n기존 퇴원 학생의 성적 이력은 보존됩니다.`,
+    '반 완전 삭제 확인',
+    `'${className}' 반을 반별설정에서 완전히 삭제할까요?`,
     ui.ButtonSet.OK_CANCEL
   );
   if (confirmation !== ui.Button.OK) return;
 
-  target[0] = false;
+  rows.splice(targetIndex, 1);
   writeClassSettingsRows_(classSheet, rows);
   if (scoreSheet) applyClassDropdowns_(ss, scoreSheet);
-  ui.alert(`'${className}' 반을 사용 중지했습니다.`);
+  ui.alert(`'${className}' 반을 반별설정과 드롭다운에서 완전히 삭제했습니다.`);
 }
 
 function replaceScoreClassName_(scoreSheet, currentKey, nextName) {
@@ -967,7 +1194,6 @@ function formatScoreInputSheet_(sheet) {
     'Writing/Grammar 교재명': 190,
     'Reading/Listening 교재명': 190,
     'Grammar 평균그룹': 115,
-    '출력여부': 80,
     'Grade': 80,
     'Writing Comment': 260,
     'Grammar Comment': 260,
@@ -982,7 +1208,6 @@ function formatScoreInputSheet_(sheet) {
     ...DESIRED_SCORE_INPUT_HEADERS,
     ...RATING_COLUMNS,
     'Grammar 평균그룹',
-    '출력여부',
     'Grade',
   ];
   centeredHeaders.forEach(header => {
@@ -1199,13 +1424,10 @@ function addScoreInputRows() {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
   const statusColumnIndex = headers.indexOf(ENROLLMENT_STATUS_HEADER) + 1;
   const idColumnIndex = headers.indexOf(STUDENT_ID_HEADER) + 1;
-  const outputColumnIndex = headers.indexOf('출력여부') + 1;
   sheet.getRange(startRow, statusColumnIndex, count, 1)
     .setValues(Array.from({ length: count }, () => ['재원']));
   sheet.getRange(startRow, idColumnIndex, count, 1)
     .setValues(Array.from({ length: count }, () => [makeNewStudentId_()]));
-  sheet.getRange(startRow, outputColumnIndex, count, 1)
-    .setValues(Array.from({ length: count }, () => [true]));
 
   ensureClassSettings_(ss, sheet);
   applyStudentControlColumns_(sheet);
@@ -1221,15 +1443,13 @@ function deactivateSelectedStudents() {
   const sheet = ss.getActiveSheet();
   const ui = SpreadsheetApp.getUi();
   if (!sheet || sheet.getName() !== CONFIG.scoreSheet) {
-    ui.alert(`'${CONFIG.scoreSheet}' 탭에서 퇴원할 학생 행을 선택한 뒤 실행하세요.`);
+    ui.alert(`'${CONFIG.scoreSheet}' 탭에서 삭제할 학생 행을 선택한 뒤 실행하세요.`);
     return;
   }
 
   ensureReportColumnsSilently_(ss);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
   const nameColumnIndex = headers.indexOf('학생 이름') + 1;
-  const statusColumnIndex = headers.indexOf(ENROLLMENT_STATUS_HEADER) + 1;
-  const outputColumnIndex = headers.indexOf('출력여부') + 1;
   const selection = sheet.getActiveRangeList();
   const rowNumbers = new Set();
   (selection ? selection.getRanges() : [sheet.getActiveRange()]).forEach(range => {
@@ -1243,14 +1463,17 @@ function deactivateSelectedStudents() {
     return;
   }
 
-  rowNumbers.forEach(row => {
-    sheet.getRange(row, statusColumnIndex).setValue('퇴원');
-    sheet.getRange(row, outputColumnIndex).setValue(false);
-  });
-  ui.alert([
-    `퇴원 처리: ${rowNumbers.size}명`,
-    '기존 성적은 보존되고 전체 PDF 출력 대상에서 제외됩니다.',
-  ].filter(Boolean).join('\n'));
+  const response = ui.alert(
+    '학생 완전 삭제 확인',
+    `선택한 ${rowNumbers.size}명의 행을 완전히 삭제합니다.\n점수와 코멘트도 함께 삭제되며 복구할 수 없습니다. 계속할까요?`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response !== ui.Button.OK) return;
+
+  Array.from(rowNumbers).sort((left, right) => right - left)
+    .forEach(rowNumber => sheet.deleteRow(rowNumber));
+  normalizeClassSpacerRows_(sheet);
+  ui.alert(`학생 ${rowNumbers.size}명의 행을 완전히 삭제했습니다.`);
 }
 
 function generateAllReports() {
@@ -1742,6 +1965,7 @@ function ensureReportColumnsSilently_(ss) {
   if (!scoreSheet) return;
 
   renameLegacyHeaders_(scoreSheet);
+  removeOutputColumn_(scoreSheet);
   ensureStudentIdColumns_(ss);
   const headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(stringValue_);
   const missing = DESIRED_INPUT_HEADERS.filter(header => !headers.includes(header));
@@ -2118,26 +2342,6 @@ function updateScoreStudentInfoRows_(sheet, headers, matches) {
     if (changed) range.setValues(values);
   });
 
-  const outputColumnIndex = headers.indexOf('출력여부') + 1;
-  if (!outputColumnIndex) return;
-
-  const outputRange = sheet.getRange(2, outputColumnIndex, rowCount, 1);
-  const outputValues = outputRange.getValues();
-  let outputChanged = false;
-  matches.forEach(match => {
-    const valueIndex = match.rowNumber - 2;
-    if (valueIndex < 0 || valueIndex >= outputValues.length) return;
-    const active = isActiveEnrollment_(match.rosterRow);
-    const wasActive = isActiveEnrollment_({ [ENROLLMENT_STATUS_HEADER]: match.previousStatus });
-    const currentValue = outputValues[valueIndex][0];
-    const nextValue = active
-      ? (!wasActive || stringValue_(currentValue) === '' ? true : currentValue)
-      : false;
-    if (currentValue === nextValue) return;
-    outputValues[valueIndex][0] = nextValue;
-    outputChanged = true;
-  });
-  if (outputChanged) outputRange.setValues(outputValues);
 }
 
 function appendScoreRowsFromRoster_(ss, sheet, headers, rosterRows) {
@@ -2149,7 +2353,6 @@ function appendScoreRowsFromRoster_(ss, sheet, headers, rosterRows) {
     STUDENT_ROSTER_SYNC_HEADERS.forEach(header => {
       rowObject[header] = rosterRow[header];
     });
-    rowObject['출력여부'] = isActiveEnrollment_(rosterRow);
     return headers.map(header => rowObject[header] === undefined ? '' : rowObject[header]);
   });
 
@@ -2690,7 +2893,6 @@ function hasProtectedScoreData_(row) {
   const automaticallyManagedHeaders = new Set([
     ...STUDENT_ROSTER_SYNC_HEADERS,
     ...CLASS_DEFAULT_SCORE_HEADERS,
-    '출력여부',
     SCORE_ORDER_HEADER,
   ]);
   const dataHeaders = Object.keys(row).filter(header => (
@@ -3268,11 +3470,7 @@ function makeFileBaseName_(row, month, outputConfig) {
 }
 
 function shouldGenerate_(row) {
-  if (!isActiveEnrollment_(row)) return false;
-  const value = row['출력여부'];
-  if (value === true) return true;
-  const text = stringValue_(value).toLowerCase();
-  return ['true', 'y', 'yes', '1', '출력'].includes(text);
+  return Boolean(stringValue_(row && row['학생 이름'])) && isActiveEnrollment_(row);
 }
 
 function isActiveEnrollment_(row) {
