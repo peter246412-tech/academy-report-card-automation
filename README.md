@@ -1,135 +1,104 @@
-# English Academy Report Automation
+# English Academy Report-Card Automation
 
-A Google Apps Script system that turns an academy's existing Google Sheets workflow into a safer report-card pipeline, from roster management and score entry to PDF generation and award rankings.
+> A workplace automation project that reduced a report-card cycle for more than 200 elementary students from over two weeks of manual work to roughly one working day.
 
-## System at a Glance
+Built with Google Sheets, Google Apps Script, HTML/CSS, Google Drive PDF export, and the OpenAI Responses API.
 
-| Score Input Sheet | Report Generation Menu |
+## At a Glance
+
+| Score-entry workflow | Report-generation menu |
 |:---:|:---:|
 | ![Anonymized score input sheet](docs/images/01-score-input.png) | ![Report generation menu in Google Sheets](docs/images/02-generate-menu.png) |
-| **Generated PDF Report Card** | **Automated Award Ranking Sheet** |
-| ![Generated PDF report card with anonymized data](docs/images/03-report-card-pdf.png) | ![Automatically generated award ranking sheet](docs/images/04-award-ranking.png) |
+| **Generated report card** | **Automated award ranking** |
+| ![Anonymized PDF report card](docs/images/03-report-card-pdf.png) | ![Automated ranking sheet](docs/images/04-award-ranking.png) |
 
-_All screens use anonymized demonstration data. No real student information is shown._
+_All screenshots contain anonymized demonstration data. No real student information is included in this repository._
 
-## Automation Workflow
+## Why I Built It
+
+I began working as an assistant English instructor at an elementary English academy during the summer break of my third year at university. I was hired to support lessons, not to develop software. Soon after joining, however, I saw the staff preparing a major reporting cycle for more than 200 students.
+
+The existing process was almost entirely manual. Staff entered student information and scores across multiple subjects, calculated comparison averages, wrote subject comments, assembled report cards, and prepared award rankings. The work had a fixed parent-delivery deadline and had to be completed alongside daily teaching.
+
+I proposed keeping the Google Sheets interface that staff already knew and using Apps Script as the automation layer. The goal was not just to produce one batch of PDFs, but to leave behind a system that the academy could continue to operate without a developer.
+
+## Final Operating Model
 
 ```mermaid
 flowchart TD
-    A[Teacher manages students in the score-entry sheet] --> C[Single source of truth in academy class order]
-    C --> D[Teacher enters scores and comments]
-    D --> E[Calculate class and grammar-group averages]
-    E --> F[Generate PDF reports in Google Drive]
-    D --> G[Generate class award rankings]
+    A[Manage students and classes in the score-entry sheet] --> B[Keep one source of truth]
+    B --> C[Enter scores, ratings, books, and comments]
+    C --> D[Calculate class and grammar-group averages]
+    D --> E[Generate individual PDF report cards]
+    C --> F[Generate class award rankings]
+    E --> G[Save Drive files and generation logs]
 ```
 
-## Project Background
+The final version:
 
-I joined an elementary English academy as an assistant English instructor during my university break. The academy was preparing student report cards, comments, average comparisons, and award rankings manually.
-
-Even in a part-time role, I try to look beyond the task immediately in front of me and understand the wider workflow. I ask questions such as:
-
-- Why is this work performed this way?
-- How much time is being spent on repetitive tasks?
-- As staff fatigue accumulates, how do errors and service quality change?
-- How might those changes affect parent satisfaction, student re-enrollment, and academy revenue?
-- How much time and cost could be saved by introducing the right technology?
-
-From this perspective, manual report-card preparation was more than an inconvenient routine. I believed that repeated administrative work could increase teacher fatigue and the likelihood of mistakes, eventually affecting the quality of service delivered to parents and students.
-
-Rather than replacing tools the staff already knew, I kept the academy's existing Google Sheets environment and automated report generation, average calculations, and award rankings with Google Apps Script. This lightweight approach reduced repetitive work without requiring a separate application or paid system.
-
-This project was built to help teachers generate report cards faster, reduce manual calculation work, and make student award rankings immediately available after entering scores.
-
-## What This System Does
-
-- Uses `성적입력` as the single source for student information and assessment data
-- Uses stable student IDs so data follows the student rather than a visual row position
-- Moves an intact student row when a name or class is edited, preserving scores and comments
-- Keeps exactly one blank separator row between different class groups
-- Adds, renames, and deletes classes through explicit menu commands
-- Permanently deletes a student only through an explicit action or `퇴원` status change
-- Removes the redundant per-row output checkbox and generates batch reports for active students
-- Generates individual PDF report cards from Google Sheets data
-- Supports 2-subject and 4-subject report formats automatically
-- Compares each student's score with the relevant class or grammar-group average
-- Separates grammar average groups from regular class averages
-- Creates a second-page teacher comment table by subject
-- Uses dropdowns for repeated inputs such as class names, grammar groups, and learning attitude ratings
-- Allows report title, output month, folder name, and file naming rules to be changed from a settings sheet
-- Creates a class-by-class award ranking sheet sorted by total score
-- Logs generated PDF results and Drive links
-- Validates score ranges and required report fields before creating each PDF
+- uses `성적입력` as the single source for student identity and assessment data;
+- gives each student a hidden, persistent ID;
+- moves the complete physical row when a student changes class;
+- preserves scores, ratings, books, grammar groups, comments, notes, formulas, formatting, and validation during that move;
+- keeps one blank separator row between class groups;
+- freezes the four identity columns while assessment columns scroll horizontally;
+- provides explicit student add/delete and class add/rename/delete commands;
+- removes the redundant `출력여부` checkbox and uses active student rows for batch output;
+- calculates regular class averages and separate grammar-group averages;
+- generates two-subject or four-subject PDF report cards;
+- creates class award rankings with tie handling;
+- optionally polishes teacher comments with the OpenAI Responses API; and
+- records generated file names, statuses, and Google Drive links.
 
 ## Main Workflow
 
 1. Staff maintain active classes and textbook defaults in `반별설정`.
-2. Staff manage students and class placement directly in `성적입력`.
-3. Staff add students from the menu; completed rows move to the end of the selected class as intact rows.
-4. Changing an existing student's class moves the full row, preserving scores, ratings, books, and comments.
-5. Departing students are permanently removed after an explicit menu confirmation or by selecting `퇴원`.
-6. Teachers generate PDFs, polish comments, and create award rankings from the menu.
-7. The system saves reports to Google Drive and records results in `생성로그`.
+2. Staff add students and manage class placement directly in `성적입력`.
+3. Entering or changing a class moves the intact row to the end of that class block.
+4. Staff enter scores, ratings, grammar groups, textbooks, and comments in the same row.
+5. A departing student is permanently removed only through an explicit delete action or `퇴원` status change.
+6. Teachers generate PDFs, polish comments, and create award rankings from the custom menu.
+7. The system saves PDFs to Google Drive and writes the result to `생성로그`.
 
-## Key Features
+## Development Journey
 
-### Report Card PDF Generation
+The final structure was not the first implementation. It emerged through repeated feedback, data-safety failures, and regression fixes in a live spreadsheet workflow.
 
-The PDF template is built with Apps Script HTML templates. Each report includes:
+### 1. Automating the Manual Report Cycle
 
-- Academy logo
-- Student name, grade, and class
-- Learning attitude table
-- Achievement chart comparing student score and average score
-- Textbook information
-- Subject-specific teacher comments on page 2
+The first version focused on the visible bottleneck: turn entered scores and comments into consistent PDF reports. I built the HTML/CSS report template, average calculations, Drive export, file naming, and generation logs around the academy's existing spreadsheet.
 
-### Average Comparison Logic
+After report generation worked, I added class award rankings because that was the next task staff performed after completing scores. This shifted the project from a single script toward an operational workflow.
 
-The system calculates averages by configurable groups:
+### 2. Replacing Row Position with Stable Identity
 
-- Reading, Writing, and Listening/Speaking use class-based averages
-- Grammar can use a separate `Grammar 평균그룹`, such as `A`, `B`, or `C`
+Spreadsheet row numbers are not reliable identities. Rows move when classes are reorganized or separator rows are inserted, so position-based updates can attach completed work to the wrong student.
 
-This reflects the academy's real teaching structure, where grammar classes may not always match the main class name.
+I introduced hidden persistent student IDs and treated the student, not the row number, as the identity boundary. Legacy data is connected only when the match is unambiguous.
 
-### Award Ranking Automation
+### 3. Stopping Destructive Synchronization
 
-The `시상순위` sheet is generated automatically from entered scores. It shows:
+An early two-sheet design automatically synchronized a student roster with the score sheet. In real use, roster replacement, partial edits, and class changes caused entered scores or comments to disappear.
 
-- Month
-- Class name
-- Rank
-- Student name
-- Total score
-- Average score
-- Number of subjects entered
-- Scores by subject
+The first repair was a guarded, non-destructive import model. It could update identity fields but refused to clear assessment data or guess ambiguous same-name matches. This solved the immediate data-loss path and established a core rule: uncertain automation must stop rather than guess.
 
-Students are grouped by class and sorted from highest to lowest total score. Ties receive the same rank.
+### 4. Separating Data Movement from Spreadsheet UI Setup
 
-### Admin-Friendly Settings
+Another iteration rebuilt validation rules during synchronization. The values survived, but Google Sheets also reset carefully assigned dropdown colors. The underlying problem was that one routine was responsible for both data movement and interface configuration.
 
-Teachers can update operational data without editing code:
+I separated those responsibilities, removed installable synchronization triggers, and made dropdown and sheet-format setup an explicit maintenance operation.
 
-- `반별설정`: active class list and class-related defaults
-- `출력설정`: report title, output month, folder name, and file name rule
+### 5. Moving to One Operational Sheet
 
-### Single-Sheet Roster Management and Data Safety
+The safe importer reduced risk, but staff still had to understand which sheet owned each field and when synchronization should run. Feedback consistently pointed to a simpler expectation: add or edit the student directly where scores are entered.
 
-The final workflow removes the separate roster dependency. Staff manage identity, class placement, and assessment data in `성적입력`, so there is no automatic two-sheet synchronization that can rewrite teacher work.
+I removed the separate roster dependency from normal operation and made `성적입력` the only source of truth. New and existing students now follow the same rule: changing the class moves the complete row to that class's final position. No assessment field is reconstructed from a partial object.
 
-- New student rows receive a hidden stable ID and active enrollment status.
-- Once a name and class are entered, the complete row moves to the end of that class block.
-- Editing an existing class moves the same physical row, so scores, ratings, books, grammar groups, and comments move together.
-- Different classes remain separated by one blank row for scanning and repeated data entry.
-- Selecting `퇴원` or using the delete command removes the complete row; menu deletion requires confirmation.
-- Batch PDF generation and award rankings use active rows directly, without a separate `출력여부` checkbox.
-- A document lock prevents overlapping row-management operations.
+Student and class lifecycle operations also became explicit. A class cannot be deleted while students still reference it, and a student is deleted as a complete row only through a deliberate action.
 
-### Operational Class Ordering
+### 6. Encoding the Academy's Class Order
 
-The class settings screen uses the academy's normalized curriculum order:
+Alphabetical sorting did not match the curriculum. For example, it could place `PowerStation` before `Pre-Inter`. I encoded a normalized domain order that handles differences in spaces, hyphens, and capitalization:
 
 ```text
 Starter 1-4
@@ -140,88 +109,74 @@ PowerStation 1-2
 Grammar 1-4
 ```
 
-Spaces, hyphens, and capitalization are normalized for comparison. Staff add, rename, or delete classes through the custom menu. A class cannot be deleted while student rows still reference it.
+The class settings list and row-placement logic use the same normalized identity and ordering rules.
+
+The detailed problem-solving record is available in [PORTFOLIO_CASE_STUDY.md](PORTFOLIO_CASE_STUDY.md).
+
+## Core Features
+
+### Report-Card PDF Generation
+
+Each generated report includes:
+
+- academy branding and student information;
+- learning-attitude ratings;
+- a chart comparing the student score with the relevant average;
+- textbook information; and
+- subject-specific teacher comments on a second page.
+
+### Average Calculation
+
+- Writing, Reading, and Listening/Speaking use class-based averages.
+- Grammar can use a separate `Grammar 평균그룹`, such as `A`, `B`, or `C`.
+- Blank score subjects are excluded from averages, charts, and report sections.
+
+### Award Ranking
+
+The generated `시상순위` sheet includes month, class, rank, student, total, average, subject count, and subject scores. Students are grouped by class, sorted by total score, and ties receive the same rank.
+
+### Admin-Friendly Settings
+
+- `반별설정`: class list and class-level textbook defaults
+- `출력설정`: report title, output month, Drive folder, file-name rule, and AI model
+
+## My Role and Ownership
+
+I identified the operational problem, proposed the project, translated staff workflows into rules, designed the spreadsheet behavior, tested real scenarios, diagnosed regressions, and prepared the handoff documentation.
+
+This project was created early in my programming journey, and I used AI extensively to help draft and revise code. My responsibility was to define constraints, inspect behavior, reproduce failures, protect live teacher-entered data, and decide whether each change was safe enough to deploy. I present the project as end-to-end product and engineering ownership, not as a claim that every line was written without assistance.
+
+## Outcome
+
+The previous report-card cycle took more than two weeks of manual effort. The completed workflow made it possible to handle the core process within approximately one working day. This is an operational before-and-after estimate from the workplace, not a controlled benchmark.
+
+The stronger outcome was adoption. Staff continued using the system, provided feedback that shaped later iterations, and asked about future automation work. The project demonstrated that a lightweight tool can create durable value when it fits the users' existing environment and treats their data as the primary constraint.
+
+## What I Learned
+
+- Useful automation begins with understanding people and workflow, not choosing a technology.
+- A shared spreadsheet is a small information system and needs identity and integrity safeguards.
+- Successful output is not enough; changes require regression testing across the full workflow.
+- AI can accelerate implementation, but it does not replace requirements, verification, or responsibility.
+- The safest automation makes destructive actions explicit and predictable.
 
 ## Technology
 
-- Google Apps Script
-- Google Sheets
-- HTML/CSS for PDF templates
+- Google Apps Script and Google Sheets
+- HTML/CSS templates
 - Google Drive PDF export
-- OpenAI Responses API for optional teacher-comment polishing
-- Script Properties for API-key storage
-- Simple spreadsheet edit handling and Apps Script locking
+- Spreadsheet edit handling and document locking
+- OpenAI Responses API for optional comment polishing
+- Script Properties for secret storage
 
-## Files
+## Repository Guide
 
-- `Code.gs`: student and class management, data safeguards, menus, PDF generation, averages, AI comments, and ranking logic
-- `ReportTemplate.html`: HTML/CSS template for the PDF report card
-- `PORTFOLIO_CASE_STUDY.md`: detailed problem-solving and iteration record
-- `업데이트_이용방법.md`: operational setup guide for applying updates in Apps Script
-- `appsscript.json`: V8 runtime, timezone, and required OAuth scopes
+- [`Code.gs`](Code.gs): student and class management, safeguards, averages, PDF generation, AI comment polishing, and ranking logic
+- [`ReportTemplate.html`](ReportTemplate.html): two-page report-card template
+- [`PORTFOLIO_CASE_STUDY.md`](PORTFOLIO_CASE_STUDY.md): detailed engineering iterations and decisions
+- [`업데이트_이용방법.md`](업데이트_이용방법.md): Korean-language operating and handoff guide
+- [`appsscript.json`](appsscript.json): runtime, timezone, and OAuth configuration
 
-## Engineering Journey
+## Privacy and Responsible Use
 
-### 1. Replacing Row-Position Assumptions with Stable Identity
-
-An early cleanup routine revealed that spreadsheet row positions are not reliable identities. Rows move whenever classes are sorted or separator rows are inserted, so a position-based update could associate assessment data with the wrong student.
-
-I redesigned the model around hidden, persistent student IDs. Legacy rows are connected only when an ID or unique student name makes the association safe. This changed the synchronization contract from "same row" to "same student."
-
-### 2. Replacing Destructive Synchronization with a Safer Intermediate Model
-
-Real use showed that even a guarded delete path was too risky for a score workbook. I first introduced a non-destructive import path that updated identity fields while refusing to clear assessment data. This stopped the immediate data-loss failure and established a stronger rule: uncertain automation must stop rather than guess.
-
-### 3. Fixing a Dropdown-Color Regression
-
-An intermediate version refreshed data-validation rules during every sync. In Google Sheets, that also rebuilt the dropdown presentation and turned carefully assigned class colors white. I traced the problem to synchronization doing two unrelated jobs: moving data and rebuilding UI rules.
-
-The intermediate repair isolated roster import from validation-rule setup. Old installable change triggers were removed, and normal student edits moved toward `성적입력`. Dropdown setup and sheet formatting became explicit maintenance operations.
-
-### 4. Creating a Deterministic Academy Class Order
-
-Alphabetical sorting placed `PowerStation` before `Pre-Inter` and did not match the academy's teaching progression. I introduced an explicit domain order and a normalization function that handles variants such as `Pre-Inter 1`, `Pre-Inter1`, and differences in capitalization. Class settings and row-placement logic use this order while moving complete rows so teacher-entered fields stay attached.
-
-### 5. Simplifying the Final Workflow Around One Sheet
-
-The safer import reduced data loss, but staff feedback showed that maintaining a separate roster and understanding synchronization rules still created operational risk. Teachers wanted to add a student, change a class, and continue entering scores in one place.
-
-I removed the roster dependency and redesigned normal operations around `성적입력`:
-
-- adding a student creates a prepared row with a stable hidden ID
-- completing the name and class moves the intact row to that class's final position
-- editing an existing class moves the full row rather than rebuilding its values
-- class blocks keep one blank separator row
-- class creation, rename, and deletion are explicit menu operations
-- student removal is explicit and removes the complete row
-- batch output uses active student rows directly, so `출력여부` is no longer needed
-
-This final iteration was not a clean-slate rewrite. It was the result of observing real failures, preserving already-entered teacher work, and repeatedly narrowing automation to behavior staff could predict.
-
-The detailed iteration record is available in [PORTFOLIO_CASE_STUDY.md](PORTFOLIO_CASE_STUDY.md).
-
-## Impact
-
-This project converted a manual report-card workflow into a repeatable automation process. It helped teachers:
-
-- Reduce repetitive data entry and calculation work
-- Maintain one roster source without manually copying changes into the score sheet
-- Generate report cards more quickly
-- Avoid manual average and ranking mistakes
-- Produce consistent PDF designs
-- Protect existing teacher input during roster changes and class reordering
-- Prepare award rankings immediately after entering scores
-
-The project is a practical example of applying AI-era tooling and automation thinking to a real workplace problem, even outside a formal software engineering role.
-
-## User Feedback and Workplace Recognition
-
-After introducing the system, I conducted short feedback check-ins with the academy director and teachers. I asked whether the tool was easy to use, which features were most helpful, whether it reduced the inconvenience of the previous workflow, what additional features they needed, and whether they intended to keep using it.
-
-The feedback was consistently positive. The staff recognized that the system reduced repetitive work and made the report-card process easier to manage, while the conversations also gave me practical direction for future improvements.
-
-The response went beyond positive comments about the tool. Less than one month after I started working at the academy, I was asked whether I would consider moving beyond the part-time role and joining as a regular staff member. I was also asked whether I would be willing to take on future outsourced automation work for the academy. For me, this was meaningful evidence that proactively identifying an operational problem and delivering a usable solution could build trust quickly, even without holding a formal software position.
-
-## Privacy Note
-
-This repository contains the automation code and template only. Real student data, generated PDFs, and private Google Sheet contents should not be committed.
+The public repository contains code, templates, and anonymized demonstrations only. Real names, scores, teacher comments, generated PDFs, API keys, and private Google Sheet contents are excluded. AI-based comment polishing is optional, and secrets are stored in Script Properties rather than source code.
