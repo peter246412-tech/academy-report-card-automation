@@ -55,21 +55,21 @@ I introduced a hidden `학생ID` in the score-entry sheet.
 
 This made visual sorting independent from student identity.
 
-## Iteration 2: Replacing Destructive Sync with State
+## Iteration 2: Replacing Destructive Sync with a Safer Intermediate Model
 
 ### Problem
 
 The first synchronization design still treated a missing roster row as a deletion candidate. In real use, list replacement, row movement, and partial edits made that assumption unsafe. Teachers reported that entered assessment content could disappear while they were maintaining the roster.
 
-### Solution
+### Intermediate Solution
 
-I ultimately removed automatic two-sheet synchronization and made `성적입력` the single source of truth.
+I first replaced destructive synchronization with a non-destructive import model.
 
 - A safe paste-import may add a score row or update day, time, class, name, and enrollment status.
 - It may not clear or move existing score rows.
 - Scores, ratings, grades, grammar groups, textbooks, comments, notes, and formulas remain untouched.
-- A departing student is marked `퇴원`, which preserves history while excluding that row from batch reports and rankings.
-- Students absent from an imported roster remain stored until staff explicitly mark them as departed.
+- A departing student could be marked `퇴원`, preserving history while excluding that row from batch reports and rankings.
+- Students absent from an imported roster remained stored until staff explicitly reviewed them.
 
 A document lock prevents overlapping roster imports.
 
@@ -98,7 +98,7 @@ I separated one-time roster import from sheet setup and removed the installable 
 - Dropdown setup and sheet formatting run through explicit maintenance commands.
 - Student rows are now managed directly in `성적입력`; class changes move the intact row to the target class block.
 
-The result removes the failure-prone automatic behavior while keeping existing class colors intact.
+The result removed the failure-prone automatic behavior while keeping existing class colors intact. It also exposed the next product problem: even a safe two-sheet workflow was harder for staff to reason about than direct editing.
 
 ## Iteration 4: Domain-Specific Class Ordering
 
@@ -117,14 +117,35 @@ Advanced 1, 2, 3, 4
 PowerStation 1, 2
 ```
 
-The comparator normalizes spaces, hyphens, and capitalization before assigning a rank. The class settings list uses this order, but score rows are no longer sorted automatically because preserving teacher-entered rows is the stronger invariant.
+The comparator normalizes spaces, hyphens, and capitalization before assigning a rank. The class settings list and later row-placement behavior use the same normalized class identity.
+
+## Iteration 5: From Safe Synchronization to Direct Row Management
+
+### Problem
+
+The non-destructive importer protected assessment data, but staff still had to understand which sheet owned each field and when synchronization should run. User feedback consistently returned to the same desired workflow: add or edit a student directly where scores are entered.
+
+### Solution
+
+I made `성적입력` the only operational source of truth and removed normal dependence on `학생명단`.
+
+- New students are created from a menu command with a stable hidden ID.
+- Entering or changing a class moves the complete physical row to the end of that class block.
+- Scores, ratings, textbooks, grammar groups, comments, notes, formulas, formatting, and validation move with the row.
+- One blank row is maintained between different classes.
+- The first four identity columns remain frozen while assessment columns scroll horizontally.
+- Class add, rename, and delete operations are explicit; deletion is blocked while students still use the class.
+- Student removal is explicit and deletes the complete row after confirmation.
+- The redundant `출력여부` column was removed; active students are the batch-output population.
+
+The final design became simpler for staff and safer for existing teacher work because normal operations no longer copy data between sheets. This was not a clean-slate rewrite: it came from observing real failures, preserving already-entered work, and narrowing automation to behavior staff could predict.
 
 ## Final Operational Flow
 
 1. Staff manage active classes and textbook defaults in `반별설정`.
 2. Staff add students, change class placement, mark departures, and enter assessment data in `성적입력`.
-3. For bulk changes, staff paste a four-column roster into the safe-import dialog.
-4. The system adds new rows and updates identity fields without deleting assessment data.
+3. Adding a student or changing a class moves the intact row into the correct class block.
+4. Staff enter scores, ratings, grammar groups, books, and comments in that same row.
 5. The system calculates the correct comparison group for each subject.
 6. Teachers generate PDFs and award rankings from the custom menu.
 7. Generation results and Drive links are written to `생성로그`.
@@ -135,11 +156,11 @@ The comparator normalizes spaces, hyphens, and capitalization before assigning a
 | --- | --- |
 | Keep Google Sheets as the interface | Minimize training and deployment cost |
 | Use stable hidden IDs | Decouple student identity from row order |
-| Remove destructive roster operations | Make completed teacher work invariant under roster changes |
+| Move complete physical rows | Keep all assessment fields attached during class changes |
 | Separate sync from validation setup | Preserve dropdown colors and reduce side effects |
 | Use an explicit class-order table | Model the academy's real curriculum sequence |
-| Model departures with `퇴원` state | Preserve history while excluding inactive students from output |
-| Replace automatic sync with safe paste-import | Keep one source of truth and remove destructive side effects |
+| Make deletion explicit | Prevent hidden cleanup logic from removing teacher work |
+| Replace automatic sync with direct editing | Keep one source of truth and remove synchronization side effects |
 | Store API keys in Script Properties | Keep secrets out of sheets and source code |
 
 ## Result
@@ -148,8 +169,8 @@ The final system combines report generation with the less visible work required 
 
 - one source of truth in `성적입력`
 - direct handling of normal student additions and class changes
-- non-destructive bulk roster import
-- non-destructive preservation of existing assessment data
+- intact-row movement that preserves existing assessment data
+- explicit student and class lifecycle controls
 - consistent class order across sheets
 - preserved dropdown presentation
 - repeatable PDF and ranking generation

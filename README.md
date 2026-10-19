@@ -17,7 +17,6 @@ _All screens use anonymized demonstration data. No real student information is s
 ```mermaid
 flowchart TD
     A[Teacher manages students in the score-entry sheet] --> C[Single source of truth in academy class order]
-    B[Optional safe bulk roster import] --> C
     C --> D[Teacher enters scores and comments]
     D --> E[Calculate class and grammar-group averages]
     E --> F[Generate PDF reports in Google Drive]
@@ -45,11 +44,12 @@ This project was built to help teachers generate report cards faster, reduce man
 ## What This System Does
 
 - Uses `성적입력` as the single source for student information and assessment data
-- Safely merges a pasted four-column roster without deleting existing score rows
 - Uses stable student IDs so data follows the student rather than a visual row position
-- Never deletes, clears, sorts, or rewrites entered scores, ratings, grades, or comments during roster updates
-- Stops ambiguous same-name matches instead of attaching data to an uncertain student
-- Preserves existing Google Sheets dropdown styling during roster imports
+- Moves an intact student row when a name or class is edited, preserving scores and comments
+- Keeps exactly one blank separator row between different class groups
+- Adds, renames, and deletes classes through explicit menu commands
+- Permanently deletes a student only through an explicit action or `퇴원` status change
+- Removes the redundant per-row output checkbox and generates batch reports for active students
 - Generates individual PDF report cards from Google Sheets data
 - Supports 2-subject and 4-subject report formats automatically
 - Compares each student's score with the relevant class or grammar-group average
@@ -119,28 +119,28 @@ Teachers can update operational data without editing code:
 
 The final workflow removes the separate roster dependency. Staff manage identity, class placement, and assessment data in `성적입력`, so there is no automatic two-sheet synchronization that can rewrite teacher work.
 
-The optional roster-import command is deliberately non-destructive:
-
-- Existing students are matched only by a unique exact name and receive only day, time, class, name, and enrollment status updates.
-- New students receive new score rows and class-level textbook defaults.
-- Score, rating, grade, grammar-group, textbook, and comment cells are never cleared by roster import.
-- A `퇴원` status disables batch output without deleting the student's history.
-- Students missing from a pasted list remain in `성적입력` until staff explicitly mark them as `퇴원`.
-- Ambiguous same-name matches are reported for review rather than guessed.
-- A document lock prevents overlapping imports.
+- New student rows receive a hidden stable ID and active enrollment status.
+- Once a name and class are entered, the complete row moves to the end of that class block.
+- Editing an existing class moves the same physical row, so scores, ratings, books, grammar groups, and comments move together.
+- Different classes remain separated by one blank row for scanning and repeated data entry.
+- Selecting `퇴원` or using the delete command removes the complete row; menu deletion requires confirmation.
+- Batch PDF generation and award rankings use active rows directly, without a separate `출력여부` checkbox.
+- A document lock prevents overlapping row-management operations.
 
 ### Operational Class Ordering
 
 The class settings screen uses the academy's normalized curriculum order:
 
 ```text
+Starter 1-4
 Beginner 1-4
 Pre-Inter 1-4
 Advanced 1-4
 PowerStation 1-2
+Grammar 1-4
 ```
 
-Spaces, hyphens, and capitalization are normalized for comparison. New class names found in the roster are added to `반별설정` with blank textbook defaults.
+Spaces, hyphens, and capitalization are normalized for comparison. Staff add, rename, or delete classes through the custom menu. A class cannot be deleted while student rows still reference it.
 
 ## Technology
 
@@ -154,7 +154,7 @@ Spaces, hyphens, and capitalization are normalized for comparison. New class nam
 
 ## Files
 
-- `Code.gs`: roster import, data safeguards, menus, PDF generation, averages, AI comments, and ranking logic
+- `Code.gs`: student and class management, data safeguards, menus, PDF generation, averages, AI comments, and ranking logic
 - `ReportTemplate.html`: HTML/CSS template for the PDF report card
 - `PORTFOLIO_CASE_STUDY.md`: detailed problem-solving and iteration record
 - `업데이트_이용방법.md`: operational setup guide for applying updates in Apps Script
@@ -168,19 +168,35 @@ An early cleanup routine revealed that spreadsheet row positions are not reliabl
 
 I redesigned the model around hidden, persistent student IDs. Legacy rows are connected only when an ID or unique student name makes the association safe. This changed the synchronization contract from "same row" to "same student."
 
-### 2. Removing Destructive Synchronization
+### 2. Replacing Destructive Synchronization with a Safer Intermediate Model
 
-Real use showed that even a guarded delete path was too risky for a score workbook. I removed automatic two-sheet synchronization and made `성적입력` the single source of truth. The optional bulk import may add students and update basic identity fields, but it never deletes or reorders score rows. Departures are represented as an explicit `퇴원` state.
+Real use showed that even a guarded delete path was too risky for a score workbook. I first introduced a non-destructive import path that updated identity fields while refusing to clear assessment data. This stopped the immediate data-loss failure and established a stronger rule: uncertain automation must stop rather than guess.
 
 ### 3. Fixing a Dropdown-Color Regression
 
 An intermediate version refreshed data-validation rules during every sync. In Google Sheets, that also rebuilt the dropdown presentation and turned carefully assigned class colors white. I traced the problem to synchronization doing two unrelated jobs: moving data and rebuilding UI rules.
 
-The final version isolates optional roster import from validation-rule setup. Old installable change triggers are removed during setup, and normal student edits happen directly in `성적입력`. Dropdown setup and sheet formatting remain explicit maintenance operations.
+The intermediate repair isolated roster import from validation-rule setup. Old installable change triggers were removed, and normal student edits moved toward `성적입력`. Dropdown setup and sheet formatting became explicit maintenance operations.
 
 ### 4. Creating a Deterministic Academy Class Order
 
-Alphabetical sorting placed `PowerStation` before `Pre-Inter` and did not match the academy's teaching progression. I introduced an explicit domain order and a normalization function that handles variants such as `Pre-Inter 1`, `Pre-Inter1`, and differences in capitalization. Class settings use this order without sorting score rows that contain teacher work.
+Alphabetical sorting placed `PowerStation` before `Pre-Inter` and did not match the academy's teaching progression. I introduced an explicit domain order and a normalization function that handles variants such as `Pre-Inter 1`, `Pre-Inter1`, and differences in capitalization. Class settings and row-placement logic use this order while moving complete rows so teacher-entered fields stay attached.
+
+### 5. Simplifying the Final Workflow Around One Sheet
+
+The safer import reduced data loss, but staff feedback showed that maintaining a separate roster and understanding synchronization rules still created operational risk. Teachers wanted to add a student, change a class, and continue entering scores in one place.
+
+I removed the roster dependency and redesigned normal operations around `성적입력`:
+
+- adding a student creates a prepared row with a stable hidden ID
+- completing the name and class moves the intact row to that class's final position
+- editing an existing class moves the full row rather than rebuilding its values
+- class blocks keep one blank separator row
+- class creation, rename, and deletion are explicit menu operations
+- student removal is explicit and removes the complete row
+- batch output uses active student rows directly, so `출력여부` is no longer needed
+
+This final iteration was not a clean-slate rewrite. It was the result of observing real failures, preserving already-entered teacher work, and repeatedly narrowing automation to behavior staff could predict.
 
 The detailed iteration record is available in [PORTFOLIO_CASE_STUDY.md](PORTFOLIO_CASE_STUDY.md).
 
