@@ -1,6 +1,6 @@
 # English Academy Report-Card Automation
 
-> A workplace automation project that reduced a report-card cycle for more than 200 elementary students from over two weeks of manual work to roughly one working day.
+> A workplace automation project that reduced a report-card cycle for approximately 80 elementary students from over two weeks of manual work to roughly one working day.
 
 Built with Google Sheets, Google Apps Script, HTML/CSS, Google Drive PDF export, and the OpenAI Responses API.
 
@@ -20,7 +20,7 @@ These images document earlier iterations. The current menu and operating instruc
 
 ## Why I Built It
 
-I began working as an assistant English instructor at an elementary English academy during the summer break of my third year at university. I was hired to support lessons, not to develop software. Soon after joining, however, I saw the staff preparing a major reporting cycle for more than 200 students.
+I began working as an assistant English instructor at an elementary English academy during the summer break of my third year at university. I was hired to support lessons, not to develop software. Soon after joining, however, I saw the staff preparing a major reporting cycle for approximately 80 students.
 
 The existing process was almost entirely manual. Staff entered student information and scores across multiple subjects, calculated comparison averages, wrote subject comments, assembled report cards, and prepared award rankings. The work had a fixed parent-delivery deadline and had to be completed alongside daily teaching.
 
