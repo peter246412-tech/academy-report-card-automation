@@ -15,16 +15,51 @@ const SUBJECTS = [
   { key: 'Writing', name: 'Writing(Alpha)', scoreColumn: 'Writing(Alpha) 점수', commentColumn: 'Writing Comment' },
   { key: 'Grammar', name: 'Grammar', scoreColumn: 'Grammar 점수', commentColumn: 'Grammar Comment' },
   { key: 'Reading', name: 'Reading', scoreColumn: 'Reading 점수', commentColumn: 'Reading Comment' },
-  { key: 'Listening', name: 'Listening,Speaking', scoreColumn: 'Listening,Speaking 점수', commentColumn: 'Listening Comment' },
+  {
+    key: 'Listening',
+    name: 'Listening,Speaking',
+    scoreColumn: 'Listening,Speaking 점수',
+    commentColumn: 'Listening Comment',
+    commentAliases: ['Listening,Speaking Comment', 'Listening/Speaking Comment'],
+  },
 ];
 
 const RATING_COLUMNS = ['Vocabulary', 'Homework', 'Participation'];
 const RATING_OPTIONS = ['Need Improvement', 'Good', 'Perfect'];
 const GRAMMAR_GROUP_OPTIONS = ['A', 'B', 'C'];
+const DAY_OPTIONS = ['월수', '화목', '금'];
+const TIME_OPTIONS = ['2:00-3:30', '3:30-5:30', '3:30-5:00', '5:30-7:30'];
+const GRADE_OPTIONS = ['1학년', '2학년', '3학년', '4학년', '5학년', '6학년'];
+const SCORE_INPUT_ROW_HEIGHT = 26;
+const DEFAULT_CLASS_NAMES = [
+  'Starter1', 'Starter2', 'Starter3',
+  'Beginner1', 'Beginner2', 'Beginner3',
+  'Pre-inter1', 'Pre-inter2', 'Pre-inter3',
+  'Inter1', 'Inter2', 'Inter3',
+  'Advanced1', 'Advanced2', 'Advanced3',
+  'Powerstation1', 'Powerstation2', 'Powerstation3',
+];
+const LEGACY_CLASS_NAME_MAP = {
+  preinter4: 'Inter2',
+};
 const MIN_SCORE = 0;
 const MAX_SCORE = 100;
 const OPENAI_API_ENDPOINT = 'https://api.openai.com/v1/responses';
 const OPENAI_API_KEY_PROPERTY = 'OPENAI_API_KEY';
+const AI_COMMENT_SINGLE_RETRIES = 4;
+const AI_COMMENT_RETRY_DELAY_MS = 2000;
+const AI_COMMENT_JOB_PROPERTY = 'AI_COMMENT_POLISH_JOB';
+const QUARTER_BACKUP_FOLDER_PROPERTY = 'QUARTER_BACKUP_FOLDER';
+const QUARTER_RESET_OPERATION_PROPERTY = 'QUARTER_RESET_OPERATION';
+const REPORT_TERM_CYCLE = [
+  { month: 4, label: '1st Semester Midterm' },
+  { month: 6, label: '1st Semester Finalterm' },
+  { month: 10, label: '2nd Semester Midterm' },
+  { month: 12, label: '2nd Semester Finalterm' },
+];
+const AI_COMMENT_INITIAL_RUN_MS = 240000;
+const PDF_CONVERSION_ATTEMPTS = 3;
+const PDF_CONVERSION_RETRY_DELAY_MS = 1200;
 const STUDENT_ID_HEADER = '학생ID';
 const ENROLLMENT_STATUS_HEADER = '재원상태';
 const ENROLLMENT_STATUS_OPTIONS = ['재원', '퇴원'];
@@ -48,7 +83,6 @@ const DESIRED_INPUT_HEADERS = [
   '시간',
   '반 이름',
   '학생 이름',
-  ENROLLMENT_STATUS_HEADER,
   ...DESIRED_SCORE_INPUT_HEADERS,
   'Vocabulary',
   'Homework',
@@ -73,10 +107,14 @@ const STUDENT_ROSTER_VISIBLE_HEADERS = [
   ENROLLMENT_STATUS_HEADER,
 ];
 const SCORE_INPUT_FROZEN_COLUMN_COUNT = 4;
+const STUDENT_CORE_HEADERS = ['요일', '시간', '반 이름', '학생 이름'];
 const STUDENT_ROSTER_SYNC_HEADERS = [...STUDENT_ROSTER_VISIBLE_HEADERS, STUDENT_ID_HEADER];
 
 const ACTIVE_CLASS_LIST_HEADER = '__활성반목록';
 const GRAMMAR_GROUP_LIST_HEADER = '__Grammar그룹목록';
+const CLASS_ID_HEADER = '__반ID';
+const CLASS_PREVIOUS_NAME_HEADER = '__이전반이름';
+const CLASS_SORT_HELPER_HEADER = '__반정렬순서';
 const CLASS_CONFIG_HELPER_ROW_COUNT = 1000;
 const CLASS_SORT_ORDER = [
   'starter1',
@@ -91,12 +129,17 @@ const CLASS_SORT_ORDER = [
   'preinter2',
   'preinter3',
   'preinter4',
+  'inter1',
+  'inter2',
+  'inter3',
+  'inter4',
   'advanced1',
   'advanced2',
   'advanced3',
   'advanced4',
   'powerstation1',
   'powerstation2',
+  'powerstation3',
   'grammar1',
   'grammar2',
   'grammar3',
@@ -108,11 +151,11 @@ const CLASS_DEFAULT_SCORE_HEADERS = [
   'Reading/Listening 교재명',
 ];
 const DEFAULT_CLASS_HEADERS = [
-  '사용여부',
   '반 이름',
   '기본 Vocabulary 교재명',
   '기본 Writing/Grammar 교재명',
   '기본 Reading/Listening 교재명',
+  '삭제',
 ];
 
 const DEFAULT_OUTPUT_SETTINGS = [
@@ -125,96 +168,472 @@ const DEFAULT_OUTPUT_SETTINGS = [
 ];
 
 function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu(CONFIG.outputMenu)
+    .addItem('선택 행 학생 PDF 생성', 'generateSelectedRowReports')
+    .addItem('전체 학생 PDF 생성', 'generateAllReports')
+    .addItem('시상 순위표 생성', 'generateAwardRankingSheet')
+    .addSeparator()
+    .addItem('신입생 추가', 'showNewStudentDialog')
+    .addItem('퇴원생 삭제', 'deleteSelectedStudents')
+    .addSeparator()
+    .addItem('선택 행 AI 코멘트 다듬기', 'polishSelectedRowsComments')
+    .addItem('전체 AI 코멘트 다듬기', 'polishAllComments')
+    .addItem('AI API 키 저장', 'setOpenAiApiKey')
+    .addSeparator()
+    .addItem('분기 종료 성적표 초기화', 'finishQuarterAndReset')
+    .addToUi();
+}
+
+function finishQuarterAndReset() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActive();
   try {
-    SpreadsheetApp.getUi()
-      .createMenu(CONFIG.outputMenu)
-      .addItem('학생 추가', 'addScoreInputRows')
-      .addItem('선택 학생 완전 삭제', 'deactivateSelectedStudents')
-      .addSeparator()
-      .addItem('선택 행 학생 PDF 생성', 'generateSelectedRowReports')
-      .addItem('전체 학생 PDF 생성', 'generateAllReports')
-      .addSeparator()
-      .addItem('시상 순위표 생성', 'generateAwardRankingSheet')
-      .addSeparator()
-      .addItem('선택 행 AI 코멘트 다듬기', 'polishSelectedRowsComments')
-      .addItem('전체 AI 코멘트 다듬기', 'polishAllComments')
-      .addSeparator()
-      .addItem('새 반 추가', 'addClassSetting')
-      .addItem('반 이름 수정', 'renameClassSetting')
-      .addItem('반 삭제', 'deleteClassSetting')
-      .addSeparator()
-      .addItem('AI API 키 저장', 'setOpenAiApiKey')
-      .addToUi();
+    const properties = PropertiesService.getDocumentProperties();
+    assertQuarterResetReady_(properties);
+    const before = readQuarterWorkbook_(ss);
+    const plan = buildQuarterResetPlan_(before);
+    if (!plan.valueCount && !plan.noteCount) {
+      ui.alert('초기화할 점수·코멘트·원문 노트가 없습니다. 학생과 설정은 변경하지 않았습니다.');
+      return;
+    }
+
+    const savedFolder = properties.getProperty(QUARTER_BACKUP_FOLDER_PROPERTY);
+    const folderResponse = ui.prompt('분기 백업 폴더 이름', [
+      '저장할 Google Drive 폴더 이름을 입력하세요. 예: 학원 성적표 보관',
+      '같은 이름의 폴더가 하나 있으면 사용하고, 없으면 최종 확인 후 내 드라이브에 자동으로 만듭니다.',
+      savedFolder ? '등록된 위치를 다시 사용하려면 입력 없이 확인을 누르세요.' : '',
+      '다른 폴더 이름을 입력하면 저장 위치를 변경합니다. 특정 폴더를 지정하려면 폴더 주소도 사용할 수 있습니다.',
+    ].filter(Boolean).join('\n\n'), ui.ButtonSet.OK_CANCEL);
+    if (folderResponse.getSelectedButton() !== ui.Button.OK) return;
+    const enteredFolder = stringValue_(folderResponse.getResponseText());
+    const folderInput = enteredFolder || savedFolder;
+    const folder = getQuarterBackupFolder_(folderInput, false, !enteredFolder && Boolean(savedFolder));
+    const folderDescription = folder
+      ? `${folder.getName()}\n${folder.getUrl()}`
+      : `${folderInput}\n내 드라이브에 새 폴더를 만듭니다.`;
+
+    const nameResponse = ui.prompt('분기 보관본 이름',
+      '마감할 분기를 입력하세요. 예: 2026년 4분기\n입력하지 않으면 현재 파일명과 저장 시각으로 보관합니다.',
+      ui.ButtonSet.OK_CANCEL);
+    if (nameResponse.getSelectedButton() !== ui.Button.OK) return;
+    const label = stringValue_(nameResponse.getResponseText()) || ss.getName();
+    const confirmation = ui.alert('분기 종료 성적표 초기화', [
+      `보관 이름: ${label}`,
+      `저장 폴더: ${folderDescription}`,
+      `현재 시험: ${plan.term.current.label} (${plan.term.current.outputMonth})`,
+      `다음 출력월: ${plan.term.next.outputMonth}\n다음 성적표 제목: ${plan.term.next.title}`,
+      `대상: 점수·코멘트 ${plan.valueCount}칸, 해당 노트 ${plan.noteCount}칸`,
+      '파일 전체 백업과 내용 검증이 완료된 뒤에만 점수·코멘트 및 해당 원문 노트를 비웁니다.',
+      '초기화 후 출력월·성적표 제목만 다음 시험으로 변경합니다. PDF 저장폴더 등 나머지 설정과 학생 정보는 유지합니다.',
+      'PDF 출력이 끝났는지 확인하세요. 다른 선생님의 입력과 AI/PDF 작업을 모두 멈춘 상태에서 실행하세요.',
+      '백업 후 초기화를 진행할까요?',
+    ].join('\n\n'), ui.ButtonSet.OK_CANCEL);
+    if (confirmation !== ui.Button.OK) return;
+
+    // UI prompts suspend execution, so locks are acquired only after confirmation.
+    const result = executeQuarterReset_(ss, folder, label, quarterWorkbookSignature_(before), folderInput);
+    ui.alert('분기 마감 완료', [
+      '파일 전체를 백업하고 점수·코멘트만 초기화했습니다.',
+      `보관본: ${result.name}\n${result.url}`,
+      `다음 출력월: ${result.nextOutputMonth}\n성적표 제목: ${result.nextTitle}`,
+      '학생·반·교재·평가·Grade·Grammar 평균그룹과 나머지 설정은 유지했습니다.',
+      'PDF 저장폴더는 자동 변경하지 않았습니다. 새 시험 출력 전 필요에 따라 변경하세요.',
+    ].join('\n\n'), ui.ButtonSet.OK);
   } catch (error) {
-    console.error(`메뉴 생성 실패: ${error.message}`);
+    ui.alert('분기 마감 안내', error.message || String(error), ui.ButtonSet.OK);
   }
+}
+
+function getQuarterBackupFolder_(input, createIfMissing = true, savedFolderId = false) {
+  const text = stringValue_(input);
+  const match = text.match(/^https:\/\/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([A-Za-z0-9_-]+)(?:[/?#]|$)/);
+  const id = match ? match[1] : (savedFolderId && /^[A-Za-z0-9_-]{10,}$/.test(text) ? text : '');
+  if (id) {
+    const resourceKey = text.match(/[?&]resourcekey=([A-Za-z0-9_-]+)/i);
+    const folder = resourceKey
+      ? DriveApp.getFolderByIdAndResourceKey(id, resourceKey[1])
+      : DriveApp.getFolderById(id);
+    if (folder.isTrashed()) throw new Error('등록된 폴더가 휴지통에 있습니다. 새 폴더 이름을 입력하세요.');
+    return folder;
+  }
+  if (!text || /[\\/]/.test(text) || /^[a-z]+:/i.test(text) || text === '.' || text === '..') {
+    throw new Error('Google Drive 폴더 이름을 입력하세요. 파일 주소나 PC 경로는 사용할 수 없습니다.');
+  }
+  const folders = DriveApp.getFoldersByName(text);
+  let found = null;
+  while (folders.hasNext()) {
+    const candidate = folders.next();
+    if (candidate.isTrashed()) continue;
+    if (found) throw new Error(`'${text}' 이름의 폴더가 여러 개 있습니다. 폴더 이름을 구분하거나 원하는 폴더 주소를 입력하세요. 초기화하지 않았습니다.`);
+    found = candidate;
+  }
+  if (found) return found;
+  return createIfMissing ? DriveApp.createFolder(text) : null;
+}
+
+function assertQuarterResetReady_(properties) {
+  const raw = properties.getProperty(QUARTER_RESET_OPERATION_PROPERTY);
+  if (!raw) return;
+  const operation = JSON.parse(raw);
+  if (operation.status === 'clearing' || operation.status === 'needs_recovery') {
+    throw new Error([
+      '이전 초기화가 완료되지 않았습니다. 추가 초기화를 중단합니다.',
+      '아래 보관본을 열어 점수·코멘트를 먼저 확인하세요.',
+      operation.url || '',
+    ].join('\n'));
+  }
+}
+
+function readQuarterWorkbook_(ss, template) {
+  return ss.getSheets().map(sheet => {
+    const previous = (template || []).find(item => item.name === sheet.getName());
+    const rowCount = Math.max(sheet.getLastRow(), previous ? previous.rowCount : 1, 1);
+    const columnCount = Math.max(sheet.getLastColumn(), previous ? previous.columnCount : 1, 1);
+    const range = sheet.getRange(1, 1, rowCount, columnCount);
+    return {
+      name: sheet.getName(), rowCount, columnCount,
+      maxRows: sheet.getMaxRows(), maxColumns: sheet.getMaxColumns(),
+      values: range.getValues(), formulas: range.getFormulas(), notes: range.getNotes(),
+    };
+  });
+}
+
+function quarterWorkbookSignature_(snapshot) {
+  return JSON.stringify(snapshot.map(sheet => ({
+    name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount,
+    maxRows: sheet.maxRows, maxColumns: sheet.maxColumns,
+    cells: sheet.values.map((row, rowIndex) => row.map((value, columnIndex) => {
+      const formula = sheet.formulas[rowIndex][columnIndex];
+      if (formula) return ['formula', formula];
+      if (Object.prototype.toString.call(value) === '[object Date]') return ['date', value.getTime()];
+      return [typeof value, value];
+    })),
+    notes: sheet.notes,
+  })));
+}
+
+function planNextReportTerm_(snapshot) {
+  const sheet = snapshot.find(item => item.name === CONFIG.outputConfigSheet);
+  if (!sheet || sheet.columnCount < 2) throw new Error('출력설정의 성적표 제목·출력월을 먼저 확인하세요. 초기화하지 않았습니다.');
+  const changes = ['성적표 제목', '출력월'].map(key => {
+    const matches = [];
+    sheet.values.forEach((row, index) => {
+      if (index > 0 && stringValue_(row[0]) === key) matches.push(index);
+    });
+    if (matches.length !== 1) throw new Error(`출력설정의 '${key}' 항목이 없거나 중복되어 초기화하지 않았습니다.`);
+    const rowIndex = matches[0];
+    if (sheet.formulas[rowIndex][1]) throw new Error(`출력설정의 '${key}' 값에 수식이 있어 초기화하지 않았습니다.`);
+    return { key, rowIndex, columnIndex: 1, beforeValue: sheet.values[rowIndex][1] };
+  });
+  const outputMonth = changes.find(change => change.key === '출력월').beforeValue;
+  const match = stringValue_(outputMonth).match(/^(\d{4})\s*년\s*(\d{1,2})\s*월$/);
+  const year = match ? Number(match[1]) : 0;
+  const month = match ? Number(match[2]) : 0;
+  const index = REPORT_TERM_CYCLE.findIndex(term => term.month === month);
+  if (year < 1000 || index === -1) {
+    throw new Error('출력월은 "2026년 10월"처럼 연도와 4·6·10·12월 중 하나여야 합니다. 학생 성적과 설정은 초기화하지 않았습니다.');
+  }
+  const nextIndex = (index + 1) % REPORT_TERM_CYCLE.length;
+  const nextYear = year + (nextIndex === 0 ? 1 : 0);
+  if (nextYear > 9999) throw new Error('다음 시험 연도를 계산할 수 없어 초기화하지 않았습니다.');
+  const nextTerm = REPORT_TERM_CYCLE[nextIndex];
+  const next = {
+    outputMonth: `${nextYear}년 ${nextTerm.month}월`,
+    title: `English Achievement Report – ${nextTerm.label} ${nextYear}`,
+  };
+  changes.forEach(change => {
+    change.afterValue = change.key === '출력월' ? next.outputMonth : next.title;
+  });
+  return {
+    current: { outputMonth: `${year}년 ${month}월`, label: `${REPORT_TERM_CYCLE[index].label} ${year}` },
+    next,
+    changes,
+  };
+}
+
+function buildQuarterResetPlan_(snapshot) {
+  const sheet = snapshot.find(item => item.name === CONFIG.scoreSheet);
+  if (!sheet) throw new Error(`'${CONFIG.scoreSheet}' 탭을 찾지 못했습니다.`);
+  const headers = sheet.values[0].map(stringValue_);
+  const commentKeys = new Set(SUBJECTS
+    .reduce((all, subject) => all.concat(getSubjectCommentHeaders_(subject)), [])
+    .map(normalizeCommentHeader_));
+  DESIRED_SCORE_INPUT_HEADERS.forEach(header => {
+    if (headers.filter(value => value === header).length !== 1) {
+      throw new Error(`'${header}' 열이 없거나 중복되어 초기화하지 않았습니다. 열 구성을 먼저 확인하세요.`);
+    }
+  });
+  const columns = [];
+  headers.forEach((header, index) => {
+    if (DESIRED_SCORE_INPUT_HEADERS.includes(header) || commentKeys.has(normalizeCommentHeader_(header))) {
+      columns.push(index);
+    }
+  });
+  let valueCount = 0;
+  let noteCount = 0;
+  columns.forEach(column => {
+    for (let row = 1; row < sheet.rowCount; row += 1) {
+      if (sheet.values[row][column] !== '' || sheet.formulas[row][column]) valueCount += 1;
+      if (sheet.notes[row][column]) noteCount += 1;
+    }
+  });
+  return { columns, valueCount, noteCount, rowCount: sheet.rowCount, term: planNextReportTerm_(snapshot) };
+}
+
+function clearedQuarterSnapshot_(snapshot, plan) {
+  return snapshot.map(sheet => {
+    if (sheet.name !== CONFIG.scoreSheet) return sheet;
+    const targetColumns = new Set(plan.columns);
+    const clearTargets = matrix => matrix.map((row, rowIndex) => row.map((value, column) => (
+      rowIndex > 0 && targetColumns.has(column) ? '' : value
+    )));
+    return Object.assign({}, sheet, {
+      values: clearTargets(sheet.values),
+      formulas: clearTargets(sheet.formulas),
+      notes: clearTargets(sheet.notes),
+    });
+  });
+}
+
+function quarterSnapshotWithTermValues_(snapshot, plan, mask) {
+  return snapshot.map(sheet => {
+    if (sheet.name !== CONFIG.outputConfigSheet) return sheet;
+    const values = sheet.values.map(row => row.slice());
+    plan.term.changes.forEach(change => {
+      values[change.rowIndex][change.columnIndex] = mask ? '' : change.afterValue;
+    });
+    return Object.assign({}, sheet, { values });
+  });
+}
+
+function completedQuarterSnapshot_(snapshot, plan) {
+  return quarterSnapshotWithTermValues_(clearedQuarterSnapshot_(snapshot, plan), plan, false);
+}
+
+function restoreQuarterTargets_(ss, before, plan) {
+  const current = readQuarterWorkbook_(ss, before);
+  if (quarterWorkbookSignature_(quarterSnapshotWithTermValues_(clearedQuarterSnapshot_(before, plan), plan, true))
+      !== quarterWorkbookSignature_(quarterSnapshotWithTermValues_(clearedQuarterSnapshot_(current, plan), plan, true))) {
+    throw new Error('다른 입력 또는 행 변경이 감지되어 잘못된 행에 복원하지 않도록 자동 복원을 중단했습니다.');
+  }
+  const original = before.find(item => item.name === CONFIG.scoreSheet);
+  const now = current.find(item => item.name === CONFIG.scoreSheet);
+  plan.columns.forEach(column => {
+    for (let row = 1; row < original.rowCount; row += 1) {
+      const currentFormula = now.formulas[row][column];
+      if ((currentFormula && currentFormula !== original.formulas[row][column])
+          || (!currentFormula && now.values[row][column] !== '' && now.values[row][column] !== original.values[row][column])
+          || (now.notes[row][column] && now.notes[row][column] !== original.notes[row][column])) {
+        throw new Error('초기화 대상에 새로운 입력이 있어 덮어쓰지 않도록 자동 복원을 중단했습니다.');
+      }
+    }
+  });
+  const currentSettings = current.find(item => item.name === CONFIG.outputConfigSheet);
+  plan.term.changes.forEach(change => {
+    const value = currentSettings.values[change.rowIndex][change.columnIndex];
+    if (value !== change.beforeValue && value !== change.afterValue) {
+      throw new Error('출력설정에 새로운 입력이 있어 덮어쓰지 않도록 자동 복원을 중단했습니다.');
+    }
+  });
+  const settingsSheet = ss.getSheetByName(CONFIG.outputConfigSheet);
+  plan.term.changes.forEach(change => {
+    if (currentSettings.values[change.rowIndex][change.columnIndex] === change.beforeValue) return;
+    const value = change.beforeValue;
+    settingsSheet.getRange(change.rowIndex + 1, change.columnIndex + 1, 1, 1)
+      .setValues([[typeof value === 'string' && value.indexOf('=') === 0 ? `'${value}` : value]]);
+  });
+  const sheet = ss.getSheetByName(CONFIG.scoreSheet);
+  plan.columns.forEach(column => {
+    const range = sheet.getRange(2, column + 1, original.rowCount - 1, 1);
+    range.setValues(original.values.slice(1).map((row, index) => {
+      const formula = original.formulas[index + 1][column];
+      if (formula) return [formula];
+      const value = row[column];
+      return [typeof value === 'string' && value.indexOf('=') === 0 ? `'${value}` : value];
+    }));
+    range.setNotes(original.notes.slice(1).map(row => [row[column]]));
+  });
+  SpreadsheetApp.flush();
+  if (quarterWorkbookSignature_(readQuarterWorkbook_(ss, before)) !== quarterWorkbookSignature_(before)) {
+    throw new Error('복원 후 데이터 검증에 실패했습니다. 보관본을 확인하세요.');
+  }
+}
+
+function executeQuarterReset_(ss, folder, label, expectedSignature, folderInput) {
+  const scriptLock = LockService.getScriptLock();
+  if (!scriptLock.tryLock(1000)) throw new Error('AI 코멘트 등 다른 작업이 실행 중입니다. 작업이 끝난 뒤 다시 실행하세요.');
+  const documentLock = LockService.getDocumentLock();
+  let documentLocked = false;
+  let backupFile = null;
+  let before = null;
+  let plan = null;
+  let clearingStarted = false;
+  let aiJob = null;
+  let aiJobRemoved = false;
+  let operation = null;
+  const properties = PropertiesService.getDocumentProperties();
+  const scriptProperties = PropertiesService.getScriptProperties();
+  try {
+    if (documentLock) {
+      documentLocked = documentLock.tryLock(1000);
+      if (!documentLocked) throw new Error('학생·반 관리 작업이 실행 중입니다. 끝난 뒤 다시 실행하세요.');
+    }
+    assertQuarterResetReady_(properties);
+    SpreadsheetApp.flush();
+    before = readQuarterWorkbook_(ss);
+    if (quarterWorkbookSignature_(before) !== expectedSignature) {
+      throw new Error('확인창을 연 뒤 입력값이 바뀌어 초기화하지 않았습니다. 모든 입력을 멈추고 다시 실행하세요.');
+    }
+    plan = buildQuarterResetPlan_(before);
+    if (!plan.valueCount && !plan.noteCount) throw new Error('이미 초기화되어 있거나 초기화할 내용이 없습니다.');
+    const sheet = ss.getSheetByName(CONFIG.scoreSheet);
+    plan.columns.forEach(column => {
+      const range = sheet.getRange(2, column + 1, plan.rowCount - 1, 1);
+      if (!range.canEdit() || range.isPartOfMerge()) {
+        throw new Error('점수·코멘트에 편집 권한이 없거나 병합된 셀이 있어 초기화하지 않았습니다.');
+      }
+    });
+    const settingsSheet = ss.getSheetByName(CONFIG.outputConfigSheet);
+    plan.term.changes.forEach(change => {
+      const range = settingsSheet.getRange(change.rowIndex + 1, change.columnIndex + 1, 1, 1);
+      if (!range.canEdit() || range.isPartOfMerge()) {
+        throw new Error('출력월·성적표 제목 셀에 편집 권한이 없거나 병합되어 있어 초기화하지 않았습니다.');
+      }
+    });
+    aiJob = scriptProperties.getProperty(AI_COMMENT_JOB_PROPERTY);
+    // Resolve new names under the locks; cancelling the dialogs never creates a folder.
+    if (!folder) folder = getQuarterBackupFolder_(folderInput);
+    const folderReference = /[?&]resourcekey=/i.test(stringValue_(folderInput)) ? folderInput : folder.getUrl();
+    properties.setProperty(QUARTER_BACKUP_FOLDER_PROPERTY, folderReference);
+    const timestamp = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyyMMdd_HHmmss');
+    const name = sanitizeFileName_(`${label}_분기마감_${timestamp}`);
+    backupFile = DriveApp.getFileById(ss.getId()).makeCopy(name, folder);
+    if (backupFile.getId() === ss.getId() || backupFile.isTrashed()) throw new Error('보관본 파일을 확인하지 못했습니다.');
+    const parents = backupFile.getParents();
+    let correctFolder = false;
+    while (parents.hasNext()) {
+      if (parents.next().getId() === folder.getId()) correctFolder = true;
+    }
+    if (!correctFolder) throw new Error('보관본이 지정한 폴더에 저장되지 않아 초기화를 중단했습니다.');
+    const backup = SpreadsheetApp.openById(backupFile.getId());
+    if (quarterWorkbookSignature_(readQuarterWorkbook_(backup, before)) !== expectedSignature) {
+      throw new Error('보관본의 학생별 값·수식·노트가 원본과 일치하지 않아 초기화하지 않았습니다.');
+    }
+    if (quarterWorkbookSignature_(readQuarterWorkbook_(ss, before)) !== expectedSignature
+        || scriptProperties.getProperty(AI_COMMENT_JOB_PROPERTY) !== aiJob) {
+      throw new Error('백업 도중 다른 입력 또는 AI 작업이 감지되어 초기화하지 않았습니다.');
+    }
+    operation = { status: 'clearing', name, url: backupFile.getUrl(), backupId: backupFile.getId() };
+    properties.setProperty(QUARTER_RESET_OPERATION_PROPERTY, JSON.stringify(operation));
+    clearingStarted = true;
+    plan.columns.forEach(column => {
+      const range = sheet.getRange(2, column + 1, plan.rowCount - 1, 1);
+      range.clearContent();
+      range.clearNote();
+    });
+    SpreadsheetApp.flush();
+    if (quarterWorkbookSignature_(readQuarterWorkbook_(ss, before))
+        !== quarterWorkbookSignature_(clearedQuarterSnapshot_(before, plan))) {
+      throw new Error('초기화 후 데이터 검증에 실패했습니다.');
+    }
+    plan.term.changes.forEach(change => {
+      settingsSheet.getRange(change.rowIndex + 1, change.columnIndex + 1, 1, 1)
+        .setValues([[change.afterValue]]);
+    });
+    SpreadsheetApp.flush();
+    if (quarterWorkbookSignature_(readQuarterWorkbook_(ss, before))
+        !== quarterWorkbookSignature_(completedQuarterSnapshot_(before, plan))) {
+      throw new Error('다음 시험 출력설정 검증에 실패했습니다.');
+    }
+    if (scriptProperties.getProperty(AI_COMMENT_JOB_PROPERTY) !== aiJob) {
+      throw new Error('초기화 도중 AI 작업이 시작되어 작업을 중단합니다.');
+    }
+    if (aiJob) {
+      const state = JSON.parse(aiJob);
+      if (state.spreadsheetId === ss.getId() && state.sheetName === CONFIG.scoreSheet) {
+        scriptProperties.deleteProperty(AI_COMMENT_JOB_PROPERTY);
+        aiJobRemoved = true;
+      }
+    }
+    operation.status = 'completed';
+    properties.setProperty(QUARTER_RESET_OPERATION_PROPERTY, JSON.stringify(operation));
+    return { name, url: operation.url, nextOutputMonth: plan.term.next.outputMonth, nextTitle: plan.term.next.title };
+  } catch (error) {
+    let recovery = '점수·코멘트 초기화 전 중단했습니다.';
+    if (clearingStarted) {
+      try {
+        restoreQuarterTargets_(ss, before, plan);
+        if (aiJobRemoved) scriptProperties.setProperty(AI_COMMENT_JOB_PROPERTY, aiJob);
+        operation.status = 'restored';
+        properties.setProperty(QUARTER_RESET_OPERATION_PROPERTY, JSON.stringify(operation));
+        recovery = '초기화 중 오류가 발생하여 점수·코멘트·출력설정을 초기화 전 상태로 자동 복원했습니다.';
+      } catch (restoreError) {
+        operation.status = 'needs_recovery';
+        try {
+          properties.setProperty(QUARTER_RESET_OPERATION_PROPERTY, JSON.stringify(operation));
+        } catch (ignored) {
+          console.error(ignored);
+        }
+        recovery = `자동 복원을 완료하지 못했습니다. 더 이상 초기화하지 말고 보관본을 확인하세요.\n${restoreError.message}`;
+      }
+    }
+    throw new Error([error.message || String(error), recovery,
+      backupFile ? `보관본: ${backupFile.getUrl()}` : '보관본을 만들지 못한 경우 원본을 초기화하지 않습니다.',
+    ].join('\n\n'));
+  } finally {
+    if (documentLocked) documentLock.releaseLock();
+    scriptLock.releaseLock();
+  }
+}
+
+function setupDurableReportSystem() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName(CONFIG.scoreSheet);
+  if (!sheet) throw new Error(`'${CONFIG.scoreSheet}' 탭을 찾지 못했습니다.`);
+
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error('다른 작업이 진행 중입니다. 잠시 후 다시 실행하세요.');
 
   try {
-    const scoreSheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.scoreSheet);
-    if (scoreSheet) {
-      removeOutputColumn_(scoreSheet);
-      scoreSheet.setFrozenColumns(SCORE_INPUT_FROZEN_COLUMN_COUNT);
-    }
-  } catch (error) {
-    console.error(`성적입력 초기화 실패: ${error.message}`);
+    renameLegacyHeaders_(sheet);
+    clearLegacyManagedValidations_(sheet);
+    normalizeScoreClassNamesToDefaults_(sheet);
+    assertScoreClassesSupported_(sheet);
+    const before = collectProtectedDataFingerprint_(sheet);
+    deleteColumnsByHeader_(sheet, [ENROLLMENT_STATUS_HEADER, '상태', '출력여부']);
+    ensureRequiredHeaders_(sheet, DESIRED_INPUT_HEADERS);
+    reorderInputColumns_(sheet, DESIRED_INPUT_HEADERS);
+    ensureStudentIdColumns_(ss);
+    normalizeScheduleValues_(sheet);
+    ensureDurableClassSettings_(ss, sheet, true);
+    applyDurableDropdowns_(ss, sheet);
+    removeTrulyBlankDataRows_(sheet);
+    sortScoreRowsByClassOrder_(sheet);
+    normalizeClassSpacerRows_(sheet);
+    formatScoreInputSheet_(sheet);
+    formatClassSettingsSheet_(ss.getSheetByName(CONFIG.classConfigSheet));
+    ensureOutputSettings_(ss);
+    formatOutputSettingsSheet_(ss.getSheetByName(CONFIG.outputConfigSheet));
+
+    SpreadsheetApp.flush();
+    const after = collectProtectedDataFingerprint_(sheet, Object.keys(before.columns));
+    assertProtectedDataUnchanged_(before, after);
+    deleteLegacySheets_(ss);
+    PropertiesService.getDocumentProperties().setProperty('DURABLE_REPORT_SCHEMA', '1');
+    ss.toast(
+      `초기 설정 완료 · 학생 ${after.studentCount}명 · 기존 점수와 코멘트 보존 확인`,
+      '성적표 프로그램',
+      8
+    );
+    return { studentCount: after.studentCount, protectedColumns: Object.keys(after.columns) };
+  } finally {
+    lock.releaseLock();
   }
 }
 
 function ensureReportColumns() {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName(CONFIG.scoreSheet);
-  if (!sheet) {
-    SpreadsheetApp.getUi().alert(`'${CONFIG.scoreSheet}' 탭을 찾지 못했습니다.`);
-    return;
-  }
-
-  const studentIdResult = ensureStudentIdColumns_(ss);
-  const renamedHeaders = renameLegacyHeaders_(sheet);
-  const removedOutputColumn = removeOutputColumn_(sheet);
-  const removedHeaders = removeLegacyHeaders_(sheet);
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
-  const requiredColumns = DESIRED_INPUT_HEADERS;
-  const missing = requiredColumns.filter(header => !headers.includes(header));
-
-  if (missing.length) {
-    const appendStartColumn = sheet.getLastColumn() + 1;
-    sheet.getRange(1, appendStartColumn, 1, missing.length).setValues([missing]);
-    sheet.getRange(1, appendStartColumn, 1, missing.length)
-      .setBackground('#1F4E78')
-      .setFontColor('#FFFFFF')
-      .setFontWeight('bold')
-      .setHorizontalAlignment('center')
-      .setWrap(true);
-    sheet.setColumnWidths(appendStartColumn, missing.length, 170);
-  }
-
-  const reorderedHeaders = reorderInputColumns_(sheet, DESIRED_INPUT_HEADERS);
-  hideHeaderColumn_(sheet, STUDENT_ID_HEADER);
-  const addedClasses = ensureClassSettings_(ss, sheet);
-  const validationColumns = applyRatingDropdowns_(sheet);
-  const classDropdownColumns = applyClassDropdowns_(ss, sheet);
-  const studentControlColumns = applyStudentControlColumns_(sheet);
-  const initializedStatuses = fillBlankEnrollmentStatuses_(sheet);
-  formatScoreInputSheet_(sheet);
-  const addedSettings = ensureOutputSettings_(ss);
-  const removedTriggers = removeLegacySyncTriggers_();
-  SpreadsheetApp.getUi().alert([
-    renamedHeaders.length ? `변경된 컬럼명:\n${renamedHeaders.join('\n')}` : '변경된 컬럼명 없음',
-    removedOutputColumn ? '출력여부 컬럼 삭제 완료' : '출력여부 컬럼 없음',
-    removedHeaders.length ? `삭제된 예전 컬럼:\n${removedHeaders.join('\n')}` : '삭제된 예전 컬럼 없음',
-    missing.length ? `추가된 성적입력 컬럼:\n${missing.join('\n')}` : '성적입력 컬럼 추가 없음',
-    reorderedHeaders.length ? `정렬된 컬럼:\n${reorderedHeaders.join('\n')}` : '컬럼 순서 변경 없음',
-    addedClasses.length ? `반별설정에 추가된 반:\n${addedClasses.join('\n')}` : '반별설정 추가 반 없음',
-    validationColumns.length ? `드롭다운 적용:\n${validationColumns.join('\n')}` : '드롭다운 적용 대상 없음',
-    classDropdownColumns.length ? `반/문법반 드롭다운 적용:\n${classDropdownColumns.join('\n')}` : '반/문법반 드롭다운 적용 대상 없음',
-    studentControlColumns.length ? `학생 관리 설정:\n${studentControlColumns.join('\n')}` : '학생 관리 설정 대상 없음',
-    studentIdResult.assignedCount ? `안전 연결용 학생ID 부여: ${studentIdResult.assignedCount}명` : '학생ID 추가 부여 없음',
-    initializedStatuses ? `빈 재원상태 자동 입력: ${initializedStatuses}명` : '재원상태 추가 입력 없음',
-    addedSettings.length ? `추가된 출력설정:\n${addedSettings.join('\n')}` : '출력설정 추가 없음',
-    removedTriggers ? `기존 동기화 트리거 제거: ${removedTriggers}개` : '남아 있는 동기화 트리거 없음',
-    '이제 성적입력 탭만 사용합니다. 학생명단 탭은 확인 후 지워도 됩니다.',
-    '명단 반영은 점수·평가·Grade·교재·코멘트를 수정하지 않습니다.',
-  ].join('\n\n'));
+  return setupDurableReportSystem();
 }
 
 function renameLegacyHeaders_(sheet) {
@@ -296,8 +715,7 @@ function onEdit(e) {
   const ss = sheet.getParent();
 
   if (sheet.getName() === CONFIG.classConfigSheet && e.range.getRow() > 1) {
-    const scoreSheet = ss.getSheetByName(CONFIG.scoreSheet);
-    if (scoreSheet) applyClassDropdowns_(ss, scoreSheet);
+    handleClassSettingsEdit_(e);
     return;
   }
 
@@ -306,27 +724,530 @@ function onEdit(e) {
     const editedHeaders = headers
       .slice(e.range.getColumn() - 1, e.range.getColumn() - 1 + e.range.getNumColumns())
       .filter(Boolean);
-    if (editedHeaders.includes(ENROLLMENT_STATUS_HEADER)
-      && deleteWithdrawnRows_(sheet, e.range.getRow(), e.range.getNumRows())) {
-      return;
-    }
-    if (editedHeaders.includes('학생 이름')) {
+    const studentIdentityChanged = editedHeaders.includes('학생 이름')
+      || editedHeaders.includes('반 이름');
+    if (studentIdentityChanged) {
       assignMissingStudentIds_(sheet);
-      fillBlankEnrollmentStatuses_(sheet);
     }
-    if (editedHeaders.includes('반 이름')) {
-      ensureClassSettings_(ss, sheet);
-      applyClassDropdowns_(ss, sheet);
+    if (studentIdentityChanged) {
+      moveEditedStudentsToClassEnd_(sheet, e.range.getRow(), e.range.getNumRows());
     }
-    if (editedHeaders.includes('학생 이름') || editedHeaders.includes('반 이름')) {
-      organizeStudentRowsSafely_(
-        sheet,
-        e.range.getRow(),
-        e.range.getNumRows(),
-        true
-      );
-    }
+    if (studentIdentityChanged) applyClassGroupStyling_(sheet);
   }
+}
+
+function ensureRequiredHeaders_(sheet, requiredHeaders) {
+  const existing = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1))
+    .getValues()[0]
+    .map(stringValue_);
+  const missing = requiredHeaders.filter(header => !existing.includes(header));
+  if (!missing.length) return [];
+
+  const startColumn = sheet.getLastColumn() + 1;
+  sheet.getRange(1, startColumn, 1, missing.length).setValues([missing]);
+  return missing;
+}
+
+function deleteColumnsByHeader_(sheet, headersToDelete) {
+  if (!sheet || !sheet.getLastColumn()) return [];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const targets = headersToDelete.map(header => ({ header, column: headers.indexOf(header) + 1 }))
+    .filter(target => target.column)
+    .sort((left, right) => right.column - left.column);
+  targets.forEach(target => sheet.deleteColumn(target.column));
+  return targets.map(target => target.header);
+}
+
+function collectProtectedDataFingerprint_(sheet, headersToCheck) {
+  const values = sheet.getDataRange().getValues();
+  const headers = values.length ? values[0].map(stringValue_) : [];
+  const nameIndex = headers.indexOf('학생 이름');
+  const protectedHeaders = headersToCheck || headers.filter(header => (
+    header === '학생 이름'
+      || header === '반 이름'
+      || DESIRED_SCORE_INPUT_HEADERS.includes(header)
+      || RATING_COLUMNS.includes(header)
+      || CLASS_DEFAULT_SCORE_HEADERS.includes(header)
+      || header === 'Grammar 평균그룹'
+      || header === 'Grade'
+      || /comment/i.test(header)
+  ));
+  const studentRows = values.slice(1).filter(row => (
+    nameIndex !== -1 && stringValue_(row[nameIndex])
+  ));
+  const columns = {};
+
+  protectedHeaders.forEach(header => {
+    const index = headers.indexOf(header);
+    if (index === -1) return;
+    const payload = JSON.stringify(studentRows.map(row => row[index]));
+    const digest = Utilities.computeDigest(
+      Utilities.DigestAlgorithm.SHA_256,
+      payload,
+      Utilities.Charset.UTF_8
+    );
+    columns[header] = Utilities.base64Encode(digest);
+  });
+
+  return { studentCount: studentRows.length, columns };
+}
+
+function assertProtectedDataUnchanged_(before, after) {
+  if (before.studentCount !== after.studentCount) {
+    throw new Error(`학생 수 보존 검사 실패: ${before.studentCount}명 → ${after.studentCount}명`);
+  }
+  Object.keys(before.columns).forEach(header => {
+    if (before.columns[header] !== after.columns[header]) {
+      throw new Error(`기존 데이터 보존 검사 실패: '${header}' 값이 변경되었습니다.`);
+    }
+  });
+}
+
+function normalizeScheduleValues_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const dayColumn = headers.indexOf('요일') + 1;
+  const timeColumn = headers.indexOf('시간') + 1;
+  const rowCount = sheet.getLastRow() - 1;
+
+  if (dayColumn) {
+    const range = sheet.getRange(2, dayColumn, rowCount, 1);
+    const values = range.getValues().map(row => {
+      const normalized = stringValue_(row[0]).replace(/[·.\s]/g, '');
+      if (normalized === '월수') return ['월수'];
+      if (normalized === '화목') return ['화목'];
+      if (normalized === '금') return ['금'];
+      return [row[0]];
+    });
+    range.setValues(values);
+  }
+
+  if (timeColumn) {
+    const range = sheet.getRange(2, timeColumn, rowCount, 1);
+    const values = range.getValues().map(row => {
+      const normalized = stringValue_(row[0])
+        .replace(/[–—−]/g, '-')
+        .replace(/\s+/g, '');
+      return [TIME_OPTIONS.includes(normalized) ? normalized : row[0]];
+    });
+    range.setValues(values);
+  }
+}
+
+function normalizeScoreClassNamesToDefaults_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const classColumn = headers.indexOf('반 이름') + 1;
+  const nameColumn = headers.indexOf('학생 이름') + 1;
+  if (!classColumn || !nameColumn) return 0;
+
+  const canonicalByKey = {};
+  DEFAULT_CLASS_NAMES.forEach(className => {
+    canonicalByKey[normalizeClassNameForSort_(className)] = className;
+  });
+  const rowCount = sheet.getLastRow() - 1;
+  const classRange = sheet.getRange(2, classColumn, rowCount, 1);
+  const classValues = classRange.getValues();
+  const nameValues = sheet.getRange(2, nameColumn, rowCount, 1).getValues();
+  let changedCount = 0;
+  classValues.forEach((row, index) => {
+    if (!stringValue_(nameValues[index][0])) return;
+    const current = stringValue_(row[0]);
+    const normalized = normalizeClassNameForSort_(current);
+    const canonical = LEGACY_CLASS_NAME_MAP[normalized] || canonicalByKey[normalized];
+    if (!canonical || current === canonical) return;
+    row[0] = canonical;
+    changedCount += 1;
+  });
+  if (changedCount) classRange.setValues(classValues);
+  return changedCount;
+}
+
+function clearLegacyManagedValidations_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < 1) return [];
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const managedHeaders = [
+    '요일',
+    '시간',
+    '반 이름',
+    'Grade',
+    'Grammar 평균그룹',
+    ...RATING_COLUMNS,
+  ];
+  const cleared = [];
+  const rowCount = sheet.getLastRow() - 1;
+
+  managedHeaders.forEach(header => {
+    const columnIndex = headers.indexOf(header) + 1;
+    if (!columnIndex) return;
+    sheet.getRange(2, columnIndex, rowCount, 1).clearDataValidations();
+    cleared.push(header);
+  });
+
+  return cleared;
+}
+
+function assertScoreClassesSupported_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return;
+  const allowed = new Set(DEFAULT_CLASS_NAMES.map(normalizeClassNameForSort_));
+  const unknown = mergeUniqueValues_(
+    readObjects_(sheet, CONFIG.scoreSheet)
+      .filter(row => stringValue_(row['학생 이름']))
+      .map(row => stringValue_(row['반 이름']))
+  )
+    .filter(className => !allowed.has(normalizeClassNameForSort_(className)));
+  if (unknown.length) {
+    throw new Error([
+      '기본 18개 반 목록에 없는 반이 성적입력에 남아 있습니다.',
+      unknown.join(', '),
+      '해당 학생의 반을 확인한 뒤 setupDurableReportSystem을 다시 실행하세요.',
+    ].join('\n'));
+  }
+}
+
+function removeTrulyBlankDataRows_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+  const rowCount = sheet.getLastRow() - 1;
+  const range = sheet.getRange(2, 1, rowCount, sheet.getLastColumn());
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const values = range.getValues();
+  const formulas = range.getFormulas();
+  const notes = range.getNotes();
+  const rowsToDelete = [];
+
+  values.forEach((row, index) => {
+    const hasContent = row.some((value, column) => {
+      const header = headers[column];
+      if (header === STUDENT_ID_HEADER || header.indexOf('__') === 0) return false;
+      return stringValue_(value)
+        || stringValue_(formulas[index][column])
+        || stringValue_(notes[index][column]);
+    });
+    if (!hasContent) rowsToDelete.push(index + 2);
+  });
+  rowsToDelete.sort((left, right) => right - left).forEach(row => sheet.deleteRow(row));
+  return rowsToDelete.length;
+}
+
+function deleteLegacySheets_(ss) {
+  ['점수', '학생명단'].forEach(sheetName => {
+    const sheet = ss.getSheetByName(sheetName);
+    if (sheet && sheet.getName() !== CONFIG.scoreSheet) ss.deleteSheet(sheet);
+  });
+}
+
+function ensureDurableClassSettings_(ss, scoreSheet, resetToDefaults) {
+  let sheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  if (!sheet) sheet = ss.insertSheet(CONFIG.classConfigSheet);
+
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
+  const values = sheet.getLastRow() >= 2
+    ? sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues()
+    : [];
+  const hasDurableSchema = DEFAULT_CLASS_HEADERS.every((header, index) => headers[index] === header);
+  if (!resetToDefaults && hasDurableSchema && values.some(row => stringValue_(row[0]))) {
+    const idColumn = ensureHeaderColumn_(sheet, CLASS_ID_HEADER);
+    const previousColumn = ensureHeaderColumn_(sheet, CLASS_PREVIOUS_NAME_HEADER);
+    ensureRowExists_(sheet, 21);
+    sheet.getRange(2, 5, sheet.getMaxRows() - 1, 1).insertCheckboxes();
+    const rows = readDurableClassRows_(sheet);
+    rows.forEach(row => {
+      if (!row.id) sheet.getRange(row.rowNumber, idColumn).setValue(`CLASS-${Utilities.getUuid()}`);
+      if (!row.previousName) sheet.getRange(row.rowNumber, previousColumn).setValue(row.name);
+    });
+    sheet.hideColumns(idColumn);
+    sheet.hideColumns(previousColumn);
+    refreshDurableClassDropdown_(ss, scoreSheet);
+    formatClassSettingsSheet_(sheet, rows.length);
+    return readDurableClassRows_(sheet);
+  }
+
+  const classIndex = headers.indexOf('반 이름');
+  const useIndex = headers.indexOf('사용여부');
+  const deleteIndex = headers.indexOf('삭제');
+  const defaultIndexes = DEFAULT_CLASS_HEADERS.slice(1, 4).map(header => headers.indexOf(header));
+  const idIndex = headers.indexOf(CLASS_ID_HEADER);
+  const classesByKey = {};
+  const scoreHeaders = scoreSheet && scoreSheet.getLastColumn()
+    ? scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(stringValue_)
+    : [];
+  const scoreClassNames = scoreSheet
+    ? collectUniqueColumnValues_(scoreSheet, scoreHeaders, '반 이름')
+    : [];
+  const usedClassKeys = new Set(scoreClassNames.map(normalizeClassNameForSort_));
+
+  values.forEach(row => {
+    const className = stringValue_(row[classIndex === -1 ? 0 : classIndex]);
+    if (!className) return;
+    const key = normalizeClassNameForSort_(className);
+    if (useIndex !== -1 && !isActiveConfigRow_(row[useIndex]) && !usedClassKeys.has(key)) return;
+    if (deleteIndex !== -1 && row[deleteIndex] === true) return;
+    if (!key || classesByKey[key]) return;
+    classesByKey[key] = {
+      name: className,
+      defaults: defaultIndexes.map(index => index === -1 ? '' : row[index]),
+      id: idIndex === -1 ? '' : stringValue_(row[idIndex]),
+    };
+  });
+
+  const classes = DEFAULT_CLASS_NAMES.map(className => {
+    const existing = classesByKey[normalizeClassNameForSort_(className)];
+    return {
+      name: className,
+      defaults: existing ? existing.defaults : ['', '', ''],
+      id: existing ? existing.id : '',
+    };
+  });
+  ensureRowExists_(sheet, Math.max(classes.length + 1, 21));
+  const clearRows = Math.max(sheet.getMaxRows() - 1, 1);
+  sheet.getRange(1, 1, 1, DEFAULT_CLASS_HEADERS.length).setValues([DEFAULT_CLASS_HEADERS]);
+  sheet.getRange(2, 1, clearRows, DEFAULT_CLASS_HEADERS.length).clearContent().clearDataValidations();
+  sheet.getRange(2, 5, clearRows, 1).insertCheckboxes();
+  if (classes.length) {
+    sheet.getRange(2, 1, classes.length, DEFAULT_CLASS_HEADERS.length).setValues(
+      classes.map(item => [item.name, ...item.defaults, false])
+    );
+  }
+
+  const idColumn = ensureHeaderColumn_(sheet, CLASS_ID_HEADER);
+  const previousColumn = ensureHeaderColumn_(sheet, CLASS_PREVIOUS_NAME_HEADER);
+  sheet.getRange(2, idColumn, clearRows, 1).clearContent();
+  sheet.getRange(2, previousColumn, clearRows, 1).clearContent();
+  if (classes.length) {
+    sheet.getRange(2, idColumn, classes.length, 1)
+      .setValues(classes.map(item => [item.id || `CLASS-${Utilities.getUuid()}`]));
+    sheet.getRange(2, previousColumn, classes.length, 1)
+      .setValues(classes.map(item => [item.name]));
+  }
+  sheet.hideColumns(idColumn);
+  sheet.hideColumns(previousColumn);
+  refreshDurableClassDropdown_(ss, scoreSheet);
+  formatClassSettingsSheet_(sheet, classes.length);
+  return classes;
+}
+
+function readDurableClassRows_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  return values.map((row, index) => ({
+    rowNumber: index + 2,
+    name: stringValue_(row[headers.indexOf('반 이름')]),
+    vocabularyBook: row[headers.indexOf('기본 Vocabulary 교재명')],
+    writingGrammarBook: row[headers.indexOf('기본 Writing/Grammar 교재명')],
+    readingListeningBook: row[headers.indexOf('기본 Reading/Listening 교재명')],
+    deleteRequested: row[headers.indexOf('삭제')] === true,
+    id: stringValue_(row[headers.indexOf(CLASS_ID_HEADER)]),
+    previousName: stringValue_(row[headers.indexOf(CLASS_PREVIOUS_NAME_HEADER)]),
+  })).filter(row => row.name || row.previousName || row.deleteRequested);
+}
+
+function refreshDurableClassDropdown_(ss, scoreSheet) {
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  if (!classSheet || !scoreSheet) return [];
+  const classNames = readDurableClassRows_(classSheet)
+    .filter(row => row.name && !row.deleteRequested)
+    .map(row => row.name)
+    .sort(compareClassNamesForSort_);
+  if (!classNames.length) return [];
+  const sourceRange = writeClassConfigHelperList_(classSheet, ACTIVE_CLASS_LIST_HEADER, classNames);
+  const headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn()).getValues()[0].map(stringValue_);
+  replaceDropdownValidationForColumn_(scoreSheet, headers, '반 이름', classNames, sourceRange);
+  return classNames;
+}
+
+function applyDurableDropdowns_(ss, sheet) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  replaceDropdownValidationForColumn_(sheet, headers, '요일', DAY_OPTIONS);
+  replaceDropdownValidationForColumn_(sheet, headers, '시간', TIME_OPTIONS);
+  RATING_COLUMNS.forEach(header => (
+    replaceDropdownValidationForColumn_(sheet, headers, header, RATING_OPTIONS)
+  ));
+  replaceDropdownValidationForColumn_(sheet, headers, 'Grade', GRADE_OPTIONS);
+
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  const grammarGroups = buildGrammarGroupOptions_(sheet);
+  const grammarRange = classSheet
+    ? writeClassConfigHelperList_(classSheet, GRAMMAR_GROUP_LIST_HEADER, grammarGroups)
+    : null;
+  replaceDropdownValidationForColumn_(
+    sheet,
+    headers,
+    'Grammar 평균그룹',
+    grammarGroups,
+    grammarRange
+  );
+  refreshDurableClassDropdown_(ss, sheet);
+}
+
+function handleClassSettingsEdit_(e) {
+  const sheet = e.range.getSheet();
+  const ss = sheet.getParent();
+  const scoreSheet = ss.getSheetByName(CONFIG.scoreSheet);
+  if (!scoreSheet) return;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const visibleHeaders = headers.slice(
+    e.range.getColumn() - 1,
+    e.range.getColumn() - 1 + e.range.getNumColumns()
+  );
+  if (!visibleHeaders.some(header => DEFAULT_CLASS_HEADERS.includes(header))) return;
+
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    ss.toast('다른 반 관리 작업이 진행 중입니다. 잠시 후 다시 수정하세요.', '반별설정', 6);
+    return;
+  }
+
+  try {
+    ensureHeaderColumn_(sheet, CLASS_ID_HEADER);
+    ensureHeaderColumn_(sheet, CLASS_PREVIOUS_NAME_HEADER);
+    const refreshedHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+    const classColumn = refreshedHeaders.indexOf('반 이름') + 1;
+    const deleteColumn = refreshedHeaders.indexOf('삭제') + 1;
+    const idColumn = refreshedHeaders.indexOf(CLASS_ID_HEADER) + 1;
+    const previousColumn = refreshedHeaders.indexOf(CLASS_PREVIOUS_NAME_HEADER) + 1;
+    const firstRow = Math.max(2, e.range.getRow());
+    const lastRow = e.range.getLastRow();
+
+    for (let rowNumber = lastRow; rowNumber >= firstRow; rowNumber -= 1) {
+      let className = stringValue_(sheet.getRange(rowNumber, classColumn).getValue());
+      const previousName = stringValue_(sheet.getRange(rowNumber, previousColumn).getValue());
+      const deleteRequested = sheet.getRange(rowNumber, deleteColumn).getValue() === true;
+      if (!sheet.getRange(rowNumber, idColumn).getValue() && className) {
+        sheet.getRange(rowNumber, idColumn).setValue(`CLASS-${Utilities.getUuid()}`);
+      }
+
+      if (deleteRequested) {
+        const studentCount = countStudentsInClass_(scoreSheet, className)
+          + (normalizeClassNameForSort_(previousName) !== normalizeClassNameForSort_(className)
+            ? countStudentsInClass_(scoreSheet, previousName) : 0);
+        if (studentCount) {
+          sheet.getRange(rowNumber, deleteColumn).setValue(false);
+          ss.toast(`'${className || previousName}' 반 학생 ${studentCount}명이 있어 삭제할 수 없습니다.`, '반 삭제 중단', 8);
+        } else {
+          sheet.deleteRow(rowNumber);
+          continue;
+        }
+      }
+
+      if (!className && previousName) {
+        if (countStudentsInClass_(scoreSheet, previousName)) {
+          sheet.getRange(rowNumber, classColumn).setValue(previousName);
+          ss.toast('학생이 있는 반은 이름을 비울 수 없습니다.', '반 이름 복구', 7);
+          className = previousName;
+        }
+      }
+      if (!className) continue;
+
+      const duplicate = readDurableClassRows_(sheet).some(row => (
+        row.rowNumber !== rowNumber
+          && normalizeClassNameForSort_(row.name) === normalizeClassNameForSort_(className)
+      ));
+      if (duplicate) {
+        sheet.getRange(rowNumber, classColumn).setValue(previousName || '');
+        ss.toast(`'${className}' 반이 이미 있어 변경을 취소했습니다.`, '중복 반 이름', 7);
+        continue;
+      }
+
+      if (previousName && previousName !== className) {
+        const scoreClassColumn = findHeaderColumn_(scoreSheet, '반 이름');
+        const scoreClassRange = scoreClassColumn && scoreSheet.getLastRow() > 1
+          ? scoreSheet.getRange(2, scoreClassColumn, scoreSheet.getLastRow() - 1, 1)
+          : null;
+        const previousClasses = scoreClassRange ? scoreClassRange.getValues() : null;
+        try {
+          refreshDurableClassDropdown_(ss, scoreSheet);
+          replaceScoreClassName_(scoreSheet, normalizeClassNameForSort_(previousName), className);
+        } catch (error) {
+          sheet.getRange(rowNumber, classColumn).setValue(previousName);
+          refreshDurableClassDropdown_(ss, scoreSheet);
+          if (scoreClassRange) scoreClassRange.setValues(previousClasses);
+          throw error;
+        }
+      }
+      sheet.getRange(rowNumber, previousColumn).setValue(className);
+    }
+
+    refreshDurableClassDropdown_(ss, scoreSheet);
+    sortScoreRowsByClassOrder_(scoreSheet);
+    normalizeClassSpacerRows_(scoreSheet);
+    applyClassGroupStyling_(scoreSheet);
+    formatClassSettingsSheet_(sheet, readDurableClassRows_(sheet).length);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function countStudentsInClass_(sheet, className) {
+  if (!sheet || !className || sheet.getLastRow() < 2) return 0;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const classColumn = headers.indexOf('반 이름') + 1;
+  const nameColumn = headers.indexOf('학생 이름') + 1;
+  if (!classColumn || !nameColumn) return 0;
+  const rowCount = sheet.getLastRow() - 1;
+  const classes = sheet.getRange(2, classColumn, rowCount, 1).getValues();
+  const names = sheet.getRange(2, nameColumn, rowCount, 1).getValues();
+  const key = normalizeClassNameForSort_(className);
+  return names.reduce((count, row, index) => (
+    count + (stringValue_(row[0]) && normalizeClassNameForSort_(classes[index][0]) === key ? 1 : 0)
+  ), 0);
+}
+
+function moveEditedStudentsToClassEnd_(sheet, startRow, rowCount) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const idColumn = headers.indexOf(STUDENT_ID_HEADER) + 1;
+  const nameColumn = headers.indexOf('학생 이름') + 1;
+  if (!idColumn || !nameColumn) return;
+  const firstRow = Math.max(2, startRow);
+  const lastRow = Math.min(sheet.getLastRow(), startRow + rowCount - 1);
+  const values = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, sheet.getLastColumn()).getValues();
+  const ids = values.filter(row => stringValue_(row[nameColumn - 1]))
+    .map(row => stringValue_(row[idColumn - 1]))
+    .filter(Boolean);
+  if (!ids.length) return;
+
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    sheet.getParent().toast('행 이동이 진행 중입니다. 잠시 후 반을 다시 선택하세요.', '학생 이동', 6);
+    return;
+  }
+  try {
+    ids.forEach(id => moveStudentToClassEndById_(sheet, id));
+    sortScoreRowsByClassOrder_(sheet);
+    normalizeClassSpacerRows_(sheet);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function moveStudentToClassEndById_(sheet, studentId) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const idColumn = headers.indexOf(STUDENT_ID_HEADER) + 1;
+  const classColumn = headers.indexOf('반 이름') + 1;
+  const nameColumn = headers.indexOf('학생 이름') + 1;
+  const rowNumber = findStudentRowById_(sheet, idColumn, studentId);
+  if (!rowNumber) return false;
+  const className = stringValue_(sheet.getRange(rowNumber, classColumn).getValue());
+  if (!className) return false;
+
+  const rowCount = sheet.getLastRow() - 1;
+  const classes = sheet.getRange(2, classColumn, rowCount, 1).getValues();
+  const names = sheet.getRange(2, nameColumn, rowCount, 1).getValues();
+  const targetRows = [];
+  classes.forEach((row, index) => {
+    const candidateRow = index + 2;
+    if (candidateRow === rowNumber || !stringValue_(names[index][0])) return;
+    if (normalizeClassNameForSort_(row[0]) === normalizeClassNameForSort_(className)) {
+      targetRows.push(candidateRow);
+    }
+  });
+  if (!targetRows.length) return false;
+  const targetRow = Math.max(...targetRows);
+  if (targetRow + 1 === rowNumber) return false;
+  sheet.moveRows(sheet.getRange(rowNumber, 1, 1, 1), targetRow + 1);
+  return true;
 }
 
 function deleteWithdrawnRows_(sheet, startRow, rowCount) {
@@ -374,12 +1295,30 @@ function organizeStudentRowsSafely_(sheet, startRow, rowCount, moveToClassEnd) {
   const firstRow = Math.max(startRow, 2);
   const lastRow = Math.min(startRow + rowCount - 1, sheet.getLastRow());
   if (lastRow < firstRow) return false;
-  const editedRows = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, sheet.getLastColumn()).getValues();
+  const editedRange = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, sheet.getLastColumn());
+  let editedRows = editedRange.getValues();
+  const hasMissingStudentId = editedRows.some(row => (
+    stringValue_(row[classColumnIndex - 1])
+      && stringValue_(row[nameColumnIndex - 1])
+      && !stringValue_(row[idColumnIndex - 1])
+  ));
+  if (hasMissingStudentId) {
+    assignMissingStudentIds_(sheet);
+    editedRows = editedRange.getValues();
+  }
+
   const studentIds = editedRows.map(row => {
     if (!stringValue_(row[classColumnIndex - 1]) || !stringValue_(row[nameColumnIndex - 1])) return '';
     return stringValue_(row[idColumnIndex - 1]);
   }).filter(Boolean);
-  if (!studentIds.length) return false;
+  if (!studentIds.length) {
+    sheet.getParent().toast(
+      '학생 식별 정보를 만들지 못해 행을 이동하지 않았습니다. 입력값은 유지됩니다.',
+      '학생 행 정리',
+      8
+    );
+    return false;
+  }
 
   const lock = LockService.getDocumentLock() || LockService.getScriptLock();
   if (!lock.tryLock(5000)) {
@@ -470,6 +1409,56 @@ function organizeStudentRow_(sheet, rowNumber, moveToClassEnd, excludedStudentId
   return true;
 }
 
+function sortScoreRowsByClassOrder_(sheet) {
+  if (!sheet || sheet.getLastRow() < 3) return 0;
+
+  removeTrulyBlankDataRows_(sheet);
+  assignMissingStudentIds_(sheet);
+  const helperColumn = ensureHeaderColumn_(sheet, CLASS_SORT_HELPER_HEADER);
+  const lastColumn = sheet.getLastColumn();
+  const rowCount = sheet.getLastRow() - 1;
+  if (rowCount < 2) {
+    sheet.hideColumns(helperColumn);
+    return 0;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
+  const classColumn = headers.indexOf('반 이름');
+  const nameColumn = headers.indexOf('학생 이름');
+  const idColumn = headers.indexOf(STUDENT_ID_HEADER);
+  if (classColumn === -1 || nameColumn === -1 || idColumn === -1) return 0;
+
+  const values = sheet.getRange(2, 1, rowCount, lastColumn).getValues();
+  const students = values.map((row, index) => ({
+    originalIndex: index,
+    className: stringValue_(row[classColumn]),
+    studentName: stringValue_(row[nameColumn]),
+    studentId: stringValue_(row[idColumn]),
+  })).filter(row => row.studentName && row.studentId);
+
+  const sortedStudents = students.slice().sort((left, right) => (
+    compareClassNamesForSort_(left.className, right.className)
+      || left.originalIndex - right.originalIndex
+  ));
+  const orderByStudentId = {};
+  sortedStudents.forEach((student, index) => {
+    orderByStudentId[student.studentId] = index + 1;
+  });
+
+  const helperValues = values.map((row, index) => {
+    const studentId = stringValue_(row[idColumn]);
+    const studentName = stringValue_(row[nameColumn]);
+    if (studentName && orderByStudentId[studentId]) return [orderByStudentId[studentId]];
+    return [sortedStudents.length + index + 1];
+  });
+  sheet.getRange(2, helperColumn, rowCount, 1).setValues(helperValues);
+  sheet.getRange(2, 1, rowCount, lastColumn)
+    .sort({ column: helperColumn, ascending: true });
+  sheet.getRange(2, helperColumn, rowCount, 1).clearContent();
+  sheet.hideColumns(helperColumn);
+  return sortedStudents.length;
+}
+
 function normalizeClassSpacerRows_(sheet) {
   if (!sheet || sheet.getLastRow() < 3) return 0;
 
@@ -505,11 +1494,13 @@ function normalizeClassSpacerRows_(sheet) {
     let gapContainsData = false;
     for (let rowNumber = current.rowNumber + 1; rowNumber < next.rowNumber; rowNumber += 1) {
       const dataIndex = rowNumber - 2;
-      const hasPersistentContent = values[dataIndex].some((value, columnIndex) => (
-        stringValue_(value)
-        || stringValue_(formulas[dataIndex][columnIndex])
-        || stringValue_(notes[dataIndex][columnIndex])
-      ));
+      const hasPersistentContent = values[dataIndex].some((value, columnIndex) => {
+        const header = headers[columnIndex];
+        if (header === STUDENT_ID_HEADER || header.indexOf('__') === 0) return false;
+        return stringValue_(value)
+          || stringValue_(formulas[dataIndex][columnIndex])
+          || stringValue_(notes[dataIndex][columnIndex]);
+      });
       if (hasPersistentContent) {
         gapContainsData = true;
         break;
@@ -695,12 +1686,13 @@ function writeClassSettingsRows_(sheet, rows) {
 }
 
 function formatClassSettingsSheet_(sheet, dataRowCount) {
+  if (!sheet) return;
   const formatRowCount = Math.max(dataRowCount || 0, 20);
   ensureRowExists_(sheet, formatRowCount + 1);
   sheet.getBandings().forEach(banding => banding.remove());
 
   sheet.getRange(1, 1, 1, DEFAULT_CLASS_HEADERS.length)
-    .setBackground('#1F4E78')
+    .setBackground('#285B4D')
     .setFontColor('#FFFFFF')
     .setFontFamily('Arial')
     .setFontSize(11)
@@ -722,16 +1714,22 @@ function formatClassSettingsSheet_(sheet, dataRowCount) {
     .setVerticalAlignment('middle')
     .setWrap(true)
     .setBorder(true, true, true, true, true, true, '#D9E2F3', SpreadsheetApp.BorderStyle.SOLID);
-  sheet.getRange(2, 1, formatRowCount, 1).setHorizontalAlignment('center');
-  sheet.getRange(2, 2, formatRowCount, 1).setFontWeight('bold').setHorizontalAlignment('left');
-  sheet.getRange(2, 3, formatRowCount, 3).setHorizontalAlignment('left');
+  sheet.getRange(2, 1, formatRowCount, 1).setFontWeight('bold').setHorizontalAlignment('left');
+  sheet.getRange(2, 2, formatRowCount, 3).setHorizontalAlignment('left');
+  sheet.getRange(1, 5, formatRowCount + 1, 1).setHorizontalAlignment('center');
+  sheet.getRange(1, 5).setBackground('#9C3D45');
   sheet.setRowHeights(2, formatRowCount, 36);
-  sheet.setColumnWidth(1, 90);
-  sheet.setColumnWidth(2, 150);
-  sheet.setColumnWidth(3, 220);
+  sheet.setColumnWidth(1, 155);
+  sheet.setColumnWidth(2, 220);
+  sheet.setColumnWidth(3, 240);
   sheet.setColumnWidth(4, 240);
-  sheet.setColumnWidth(5, 240);
+  sheet.setColumnWidth(5, 80);
   sheet.setFrozenRows(1);
+
+  const idColumn = findHeaderColumn_(sheet, CLASS_ID_HEADER);
+  const previousColumn = findHeaderColumn_(sheet, CLASS_PREVIOUS_NAME_HEADER);
+  if (idColumn) sheet.hideColumns(idColumn);
+  if (previousColumn) sheet.hideColumns(previousColumn);
 }
 
 function formatClassSettings() {
@@ -799,6 +1797,7 @@ function renameClassSetting() {
   }
 
   const rows = readAndNormalizeClassSettingsRows_(classSheet);
+  const previousRows = rows.map(row => row.slice());
   const currentKey = normalizeClassNameForSort_(currentName);
   const nextKey = normalizeClassNameForSort_(nextName);
   const target = rows.find(row => normalizeClassNameForSort_(row[1]) === currentKey);
@@ -813,10 +1812,55 @@ function renameClassSetting() {
 
   target[1] = nextName;
   rows.sort((left, right) => compareClassNamesForSort_(left[1], right[1]));
-  writeClassSettingsRows_(classSheet, rows);
-  const updatedCount = replaceScoreClassName_(scoreSheet, currentKey, nextName);
-  if (scoreSheet) applyClassDropdowns_(ss, scoreSheet);
+  let updatedCount = 0;
+  try {
+    writeClassSettingsRows_(classSheet, rows);
+    refreshClassNameDropdownForRename_(classSheet, scoreSheet);
+    updatedCount = replaceScoreClassName_(scoreSheet, currentKey, nextName);
+  } catch (error) {
+    let rollbackMessage = '';
+    try {
+      writeClassSettingsRows_(classSheet, previousRows);
+      refreshClassNameDropdownForRename_(classSheet, scoreSheet);
+    } catch (rollbackError) {
+      rollbackMessage = `\n복구 오류: ${rollbackError.message}`;
+    }
+    ui.alert([
+      '반 이름을 변경하지 못해 기존 설정으로 되돌렸습니다.',
+      `오류: ${error.message}${rollbackMessage}`,
+    ].join('\n'));
+    return;
+  }
+  if (scoreSheet) {
+    try {
+      normalizeClassSpacerRows_(scoreSheet);
+    } catch (error) {
+      console.warn(`반 구분 빈 행 정리 실패: ${error.message}`);
+    }
+  }
   ui.alert(`'${currentName}' → '${nextName}' 수정 완료\n학생 행 반영: ${updatedCount}명`);
+}
+
+function refreshClassNameDropdownForRename_(classSheet, scoreSheet) {
+  if (!classSheet || !scoreSheet) return false;
+
+  const classNames = readClassConfig_(classSheet).classNames;
+  if (!classNames.length) return false;
+  const sourceRange = writeClassConfigHelperList_(
+    classSheet,
+    ACTIVE_CLASS_LIST_HEADER,
+    classNames
+  );
+  const headers = scoreSheet.getRange(1, 1, 1, scoreSheet.getLastColumn())
+    .getValues()[0]
+    .map(stringValue_);
+  return replaceDropdownValidationForColumn_(
+    scoreSheet,
+    headers,
+    '반 이름',
+    classNames,
+    sourceRange
+  );
 }
 
 function deleteClassSetting() {
@@ -831,37 +1875,38 @@ function deleteClassSetting() {
   const className = stringValue_(response.getResponseText());
   const classKey = normalizeClassNameForSort_(className);
   const rows = readAndNormalizeClassSettingsRows_(classSheet);
-  const targetIndex = rows.findIndex(row => normalizeClassNameForSort_(row[1]) === classKey);
-  if (targetIndex === -1) {
+  const target = rows.find(row => normalizeClassNameForSort_(row[1]) === classKey);
+  if (!target) {
     ui.alert(`'${className}' 반을 찾지 못했습니다.`);
     return;
   }
 
-  const classStudents = scoreSheet
+  const activeStudents = scoreSheet
     ? readObjects_(scoreSheet, CONFIG.scoreSheet).filter(row => (
       normalizeClassNameForSort_(row['반 이름']) === classKey
       && stringValue_(row['학생 이름'])
+      && isActiveEnrollment_(row)
     ))
     : [];
-  if (classStudents.length) {
+  if (activeStudents.length) {
     ui.alert([
-      `'${className}' 반에 학생 ${classStudents.length}명이 있어 삭제할 수 없습니다.`,
-      '먼저 성적입력에서 해당 학생을 다른 반으로 옮기거나 완전히 삭제하세요.',
+      `'${className}' 반에 재원 학생 ${activeStudents.length}명이 있어 삭제할 수 없습니다.`,
+      '먼저 성적입력에서 해당 학생을 다른 반으로 옮기거나 퇴원 처리하세요.',
     ].join('\n'));
     return;
   }
 
   const confirmation = ui.alert(
-    '반 완전 삭제 확인',
-    `'${className}' 반을 반별설정에서 완전히 삭제할까요?`,
+    '반 삭제 확인',
+    `'${className}' 반을 드롭다운에서 제외할까요?\n기존 퇴원 학생의 성적 이력은 보존됩니다.`,
     ui.ButtonSet.OK_CANCEL
   );
   if (confirmation !== ui.Button.OK) return;
 
-  rows.splice(targetIndex, 1);
+  target[0] = false;
   writeClassSettingsRows_(classSheet, rows);
   if (scoreSheet) applyClassDropdowns_(ss, scoreSheet);
-  ui.alert(`'${className}' 반을 반별설정과 드롭다운에서 완전히 삭제했습니다.`);
+  ui.alert(`'${className}' 반을 사용 중지했습니다.`);
 }
 
 function replaceScoreClassName_(scoreSheet, currentKey, nextName) {
@@ -916,12 +1961,9 @@ function readClassConfig_(sheet) {
   };
   if (!sheet || sheet.getLastRow() < 2) return config;
 
-  const rows = readObjects_(sheet, CONFIG.classConfigSheet);
   const classSeen = {};
-  rows.forEach(row => {
-    if (!isActiveConfigRow_(row['사용여부'])) return;
-
-    const className = stringValue_(row['반 이름']);
+  readDurableClassRows_(sheet).forEach(row => {
+    const className = stringValue_(row.name);
     if (className && !classSeen[className]) {
       classSeen[className] = true;
       config.classNames.push(className);
@@ -971,6 +2013,22 @@ function applyDropdownToColumn_(sheet, headers, header, options, sourceRange) {
   missingGroups.forEach(group => {
     sheet.getRange(group.startRow, columnIndex, group.rowCount, 1).setDataValidation(rule);
   });
+  return true;
+}
+
+function replaceDropdownValidationForColumn_(sheet, headers, header, options, sourceRange) {
+  const columnIndex = headers.indexOf(header) + 1;
+  if (!columnIndex || !options.length) return false;
+
+  ensureRowExists_(sheet, 2);
+  const builder = SpreadsheetApp.newDataValidation();
+  const rule = (sourceRange
+    ? builder.requireValueInRange(sourceRange, true)
+    : builder.requireValueInList(options, true))
+    .setAllowInvalid(false)
+    .build();
+  sheet.getRange(2, columnIndex, sheet.getMaxRows() - 1, 1)
+    .setDataValidation(rule);
   return true;
 }
 
@@ -1158,15 +2216,36 @@ function formatStudentRosterSheet_(sheet) {
 }
 
 function formatScoreInputSheet_(sheet) {
-  if (!sheet || sheet.getLastColumn() < 1) return;
+  applyClassGroupStyling_(sheet);
+}
 
+function compactScoreInputLayout() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.scoreSheet);
+  if (!sheet) throw new Error(`'${CONFIG.scoreSheet}' 탭을 찾지 못했습니다.`);
+  sortScoreRowsByClassOrder_(sheet);
+  normalizeClassSpacerRows_(sheet);
+  formatScoreInputSheet_(sheet);
+  return { rowHeight: SCORE_INPUT_ROW_HEIGHT };
+}
+
+function applyClassGroupStyling_(sheet) {
+  if (!sheet || sheet.getLastColumn() < 1) return;
   const lastColumn = sheet.getLastColumn();
   const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(stringValue_);
-  const bodyRowCount = Math.max(sheet.getLastRow() - 1, 20);
+  const bodyRowCount = Math.max(sheet.getLastRow() - 1, 24);
   ensureRowExists_(sheet, bodyRowCount + 1);
 
+  const headerColors = headers.map(header => {
+    if (STUDENT_CORE_HEADERS.includes(header)) return '#1F4E78';
+    if (DESIRED_SCORE_INPUT_HEADERS.includes(header)) return '#0F6B6D';
+    if (RATING_COLUMNS.includes(header)) return '#A46A16';
+    if (CLASS_DEFAULT_SCORE_HEADERS.includes(header)) return '#2F6B4F';
+    if (header === 'Grammar 평균그룹' || header === 'Grade') return '#6A4C7D';
+    if (/comment/i.test(header)) return '#7A3F55';
+    return '#4B5563';
+  });
   sheet.getRange(1, 1, 1, lastColumn)
-    .setBackground('#1F4E78')
+    .setBackgrounds([headerColors])
     .setFontColor('#FFFFFF')
     .setFontFamily('Arial')
     .setFontSize(10)
@@ -1174,53 +2253,109 @@ function formatScoreInputSheet_(sheet) {
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle')
     .setWrap(true);
-  sheet.setRowHeight(1, 42);
-  sheet.getRange(2, 1, bodyRowCount, lastColumn)
+  sheet.setRowHeight(1, 38);
+
+  const bodyRange = sheet.getRange(2, 1, bodyRowCount, lastColumn);
+  const classColumn = headers.indexOf('반 이름');
+  const nameColumn = headers.indexOf('학생 이름');
+  const bodyValues = bodyRange.getValues();
+  let groupIndex = -1;
+  let previousClass = '';
+  const backgrounds = bodyValues.map(row => {
+    const className = classColumn === -1 ? '' : stringValue_(row[classColumn]);
+    const studentName = nameColumn === -1 ? '' : stringValue_(row[nameColumn]);
+    if (studentName && className !== previousClass) {
+      groupIndex += 1;
+      previousClass = className;
+    }
+    const color = !studentName ? '#FFFFFF' : (groupIndex % 2 === 0 ? '#FFFFFF' : '#F3F7F6');
+    return Array(lastColumn).fill(color);
+  });
+  bodyRange
+    .setBackgrounds(backgrounds)
+    .setFontColor('#202124')
     .setFontFamily('Arial')
     .setFontSize(10)
-    .setVerticalAlignment('middle');
-  sheet.setRowHeights(2, bodyRowCount, 30);
+    .setVerticalAlignment('middle')
+    .setBorder(true, true, true, true, true, true, '#D8DEE5', SpreadsheetApp.BorderStyle.SOLID);
+  let lastClass = '';
+  bodyValues.forEach((row, index) => {
+    const className = classColumn === -1 ? '' : stringValue_(row[classColumn]);
+    const studentName = nameColumn === -1 ? '' : stringValue_(row[nameColumn]);
+    if (studentName && className !== lastClass) {
+      sheet.getRange(index + 2, 1, 1, lastColumn)
+        .setBorder(true, null, null, null, null, null, '#52796F', SpreadsheetApp.BorderStyle.SOLID_THICK);
+      lastClass = className;
+    }
+  });
 
   const widths = {
-    '요일': 80,
+    '요일': 78,
     '시간': 105,
     '반 이름': 140,
     '학생 이름': 105,
-    [ENROLLMENT_STATUS_HEADER]: 80,
-    'Vocabulary': 115,
-    'Homework': 115,
-    'Participation': 115,
-    'Vocabulary 교재명': 180,
-    'Writing/Grammar 교재명': 190,
-    'Reading/Listening 교재명': 190,
-    'Grammar 평균그룹': 115,
-    'Grade': 80,
-    'Writing Comment': 260,
-    'Grammar Comment': 260,
-    'Reading Comment': 260,
-    'Listening Comment': 260,
+    'Vocabulary': 116,
+    'Homework': 116,
+    'Participation': 116,
+    'Vocabulary 교재명': 185,
+    'Writing/Grammar 교재명': 205,
+    'Reading/Listening 교재명': 205,
+    'Grammar 평균그룹': 120,
+    'Grade': 82,
+    'Writing Comment': 300,
+    'Grammar Comment': 300,
+    'Reading Comment': 300,
+    'Listening Comment': 300,
+    'Listening,Speaking Comment': 300,
+    'Listening/Speaking Comment': 300,
   };
-  DESIRED_SCORE_INPUT_HEADERS.forEach(header => widths[header] = 115);
+  DESIRED_SCORE_INPUT_HEADERS.forEach(header => widths[header] = 120);
   headers.forEach((header, index) => sheet.setColumnWidth(index + 1, widths[header] || 130));
 
-  const centeredHeaders = [
-    ...STUDENT_ROSTER_VISIBLE_HEADERS,
+  [
+    ...STUDENT_CORE_HEADERS,
     ...DESIRED_SCORE_INPUT_HEADERS,
     ...RATING_COLUMNS,
     'Grammar 평균그룹',
     'Grade',
-  ];
-  centeredHeaders.forEach(header => {
-    const columnIndex = headers.indexOf(header) + 1;
-    if (columnIndex) sheet.getRange(2, columnIndex, bodyRowCount, 1).setHorizontalAlignment('center');
+  ].forEach(header => {
+    const column = headers.indexOf(header) + 1;
+    if (column) sheet.getRange(2, column, bodyRowCount, 1).setHorizontalAlignment('center');
   });
-  SUBJECTS.forEach(subject => {
-    const columnIndex = headers.indexOf(subject.commentColumn) + 1;
-    if (columnIndex) sheet.getRange(2, columnIndex, bodyRowCount, 1).setWrap(true);
+  headers.forEach((header, index) => {
+    if (/comment/i.test(header)) sheet.getRange(2, index + 1, bodyRowCount, 1).setWrap(true);
   });
+  sheet.setRowHeightsForced(2, bodyRowCount, SCORE_INPUT_ROW_HEIGHT);
   sheet.setFrozenRows(1);
   sheet.setFrozenColumns(SCORE_INPUT_FROZEN_COLUMN_COUNT);
   hideHeaderColumn_(sheet, STUDENT_ID_HEADER);
+}
+
+function findHeaderColumn_(sheet, header) {
+  if (!sheet || sheet.getLastColumn() < 1) return 0;
+  return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
+    .map(stringValue_)
+    .indexOf(header) + 1;
+}
+
+function formatOutputSettingsSheet_(sheet) {
+  if (!sheet) return;
+  const rowCount = Math.max(sheet.getLastRow(), 2);
+  sheet.getRange(1, 1, 1, 3)
+    .setBackground('#6A4C7D')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+  sheet.getRange(2, 1, rowCount - 1, 3)
+    .setFontFamily('Arial')
+    .setFontSize(10)
+    .setVerticalAlignment('middle')
+    .setWrap(true);
+  sheet.setFrozenRows(1);
+  sheet.setRowHeight(1, 38);
+  sheet.setColumnWidth(1, 170);
+  sheet.setColumnWidth(2, 380);
+  sheet.setColumnWidth(3, 380);
 }
 
 function openRosterImportDialog() {
@@ -1245,7 +2380,7 @@ function openRosterImportDialog() {
       <body>
         <h2>명단 안전 반영</h2>
         <p>스프레드시트에서 요일·시간·반 이름·학생 이름 4개 열을 복사해 붙여넣으세요. 기존 점수와 코멘트는 변경하지 않습니다.</p>
-        <textarea id="roster" placeholder="월·수    2:00-3:30    Starter3    김라온"></textarea>
+        <textarea id="roster" placeholder="월수    2:00-3:30    Starter1    Demo Student"></textarea>
         <div id="status"></div>
         <div class="actions">
           <button class="cancel" onclick="google.script.host.close()">취소</button>
@@ -1345,7 +2480,8 @@ function importRosterTextToScoreInputUnlocked_(text) {
       return;
     }
 
-    row[STUDENT_ID_HEADER] = makeNewStudentId_();
+    const studentId = makeNewStudentId_();
+    row[STUDENT_ID_HEADER] = studentId;
     newRows.push(row);
   });
 
@@ -1399,6 +2535,175 @@ function parseRosterImportText_(text) {
     });
   });
   return rows;
+}
+
+function showNewStudentDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('StudentForm')
+    .setWidth(520)
+    .setHeight(610);
+  SpreadsheetApp.getUi().showModalDialog(html, '신입생 추가');
+}
+
+function getNewStudentFormOptions() {
+  const ss = SpreadsheetApp.getActive();
+  const scoreSheet = ss.getSheetByName(CONFIG.scoreSheet);
+  if (!scoreSheet) throw new Error(`'${CONFIG.scoreSheet}' 탭을 찾지 못했습니다.`);
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  if (!classSheet) throw new Error(`'${CONFIG.classConfigSheet}' 탭을 찾지 못했습니다.`);
+  const classNames = readClassConfig_(classSheet).classNames;
+  if (!classNames.length) throw new Error('반별설정에 반 이름을 먼저 입력하세요. 기존 학생 데이터는 변경하지 않았습니다.');
+  return {
+    days: DAY_OPTIONS.slice(),
+    times: TIME_OPTIONS.slice(),
+    classes: classNames,
+    grades: GRADE_OPTIONS.slice(),
+  };
+}
+
+function createNewStudent(form) {
+  const input = form || {};
+  const day = stringValue_(input.day);
+  const time = stringValue_(input.time);
+  const className = stringValue_(input.className);
+  const studentName = stringValue_(input.studentName);
+  const grade = stringValue_(input.grade);
+  if (!DAY_OPTIONS.includes(day)) throw new Error('요일 드롭다운에서 값을 선택하세요.');
+  if (!TIME_OPTIONS.includes(time)) throw new Error('시간 드롭다운에서 값을 선택하세요.');
+  if (!studentName) throw new Error('학생 이름을 입력하세요.');
+  if (!GRADE_OPTIONS.includes(grade)) throw new Error('Grade를 선택하세요.');
+
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName(CONFIG.scoreSheet);
+  const classSheet = ss.getSheetByName(CONFIG.classConfigSheet);
+  if (!sheet || !classSheet) throw new Error('성적입력 또는 반별설정 시트를 찾지 못했습니다.');
+
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error('다른 학생 작업이 진행 중입니다. 잠시 후 다시 시도하세요.');
+  try {
+    const classRows = readDurableClassRows_(classSheet);
+    const classSetting = classRows.find(row => (
+      !row.deleteRequested && normalizeClassNameForSort_(row.name) === normalizeClassNameForSort_(className)
+    ));
+    if (!classSetting) throw new Error(`반별설정에서 '${className}' 반을 찾지 못했거나 삭제 처리 중입니다.`);
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+    const nameColumn = headers.indexOf('학생 이름') + 1;
+    const classColumn = headers.indexOf('반 이름') + 1;
+    if (!nameColumn || !classColumn || !headers.includes(STUDENT_ID_HEADER)) {
+      throw new Error('초기 설정이 완료되지 않았습니다. setupDurableReportSystem을 먼저 한 번 실행하세요.');
+    }
+
+    let targetRow = 0;
+    if (sheet.getLastRow() >= 2) {
+      const rowCount = sheet.getLastRow() - 1;
+      const classes = sheet.getRange(2, classColumn, rowCount, 1).getValues();
+      const names = sheet.getRange(2, nameColumn, rowCount, 1).getValues();
+      classes.forEach((row, index) => {
+        if (!stringValue_(names[index][0])) return;
+        if (normalizeClassNameForSort_(row[0]) === normalizeClassNameForSort_(className)) {
+          targetRow = index + 2;
+        }
+      });
+    }
+    if (!targetRow) targetRow = Math.max(sheet.getLastRow(), 1);
+    sheet.insertRowAfter(targetRow);
+    const newRowNumber = targetRow + 1;
+
+    const row = {};
+    row['요일'] = day;
+    row['시간'] = time;
+    row['반 이름'] = classSetting.name;
+    row['학생 이름'] = studentName;
+    row['Grade'] = grade;
+    row['Vocabulary 교재명'] = classSetting.vocabularyBook;
+    row['Writing/Grammar 교재명'] = classSetting.writingGrammarBook;
+    row['Reading/Listening 교재명'] = classSetting.readingListeningBook;
+    const studentId = makeNewStudentId_();
+    row[STUDENT_ID_HEADER] = studentId;
+    sheet.getRange(newRowNumber, 1, 1, headers.length)
+      .setValues([headers.map(header => row[header] === undefined ? '' : row[header])]);
+
+    applyDurableDropdowns_(ss, sheet);
+    sortScoreRowsByClassOrder_(sheet);
+    normalizeClassSpacerRows_(sheet);
+    applyClassGroupStyling_(sheet);
+    const idColumn = headers.indexOf(STUDENT_ID_HEADER) + 1;
+    const finalRowNumber = findStudentRowById_(sheet, idColumn, studentId) || newRowNumber;
+    ss.setActiveSheet(sheet);
+    sheet.setActiveRange(sheet.getRange(finalRowNumber, 1, 1, 4));
+    return {
+      rowNumber: finalRowNumber,
+      message: `${studentName} 학생을 ${className} 반 마지막에 추가했습니다.`,
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function deleteSelectedStudents() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getActiveSheet();
+  const ui = SpreadsheetApp.getUi();
+  if (!sheet || sheet.getName() !== CONFIG.scoreSheet) {
+    ui.alert(`'${CONFIG.scoreSheet}' 탭에서 삭제할 학생 행을 선택하세요.`);
+    return;
+  }
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const nameColumn = headers.indexOf('학생 이름') + 1;
+  const classColumn = headers.indexOf('반 이름') + 1;
+  const selection = sheet.getActiveRangeList();
+  const rowNumbers = new Set();
+  (selection ? selection.getRanges() : [sheet.getActiveRange()]).forEach(range => {
+    if (!range) return;
+    for (let row = Math.max(2, range.getRow()); row <= range.getLastRow(); row += 1) {
+      if (stringValue_(sheet.getRange(row, nameColumn).getValue())) rowNumbers.add(row);
+    }
+  });
+  if (!rowNumbers.size) {
+    ui.alert('학생 이름이 있는 행을 선택하세요.');
+    return;
+  }
+
+  const targets = Array.from(rowNumbers).sort((a, b) => a - b)
+    .map(row => readObjectAtRow_(sheet, row));
+  const targetIds = targets.map(row => stringValue_(row[STUDENT_ID_HEADER]));
+  if (targetIds.some(id => !id) || new Set(targetIds).size !== targetIds.length) {
+    ui.alert('학생ID가 없거나 중복되어 삭제하지 않았습니다. 학생 식별 정보를 먼저 확인하세요.');
+    return;
+  }
+  const labels = targets.map(row => `${stringValue_(row['반 이름'])} / ${stringValue_(row['학생 이름'])}`);
+  const response = ui.alert(
+    '퇴원생 완전 삭제',
+    `${labels.join('\n')}\n\n선택한 학생의 점수와 코멘트까지 완전히 삭제합니다. 계속할까요?`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response !== ui.Button.OK) return;
+
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    ui.alert('다른 학생 작업이 진행 중입니다. 잠시 후 다시 시도하세요.');
+    return;
+  }
+  let failureMessage = '';
+  try {
+    const currentRows = readObjects_(sheet, CONFIG.scoreSheet);
+    const currentTargets = targets.map(target => {
+      const matches = currentRows.filter(row => stringValue_(row[STUDENT_ID_HEADER]) === stringValue_(target[STUDENT_ID_HEADER]));
+      if (matches.length !== 1 || ['학생 이름', '반 이름'].some(header => (
+        stringValue_(matches[0][header]) !== stringValue_(target[header])
+      ))) {
+        throw new Error('확인창을 연 뒤 학생 정보가 바뀌어 삭제하지 않았습니다. 다시 선택하고 확인하세요.');
+      }
+      return matches[0].__sheetRow;
+    });
+    currentTargets.sort((a, b) => b - a).forEach(row => sheet.deleteRow(row));
+    normalizeClassSpacerRows_(sheet);
+    applyClassGroupStyling_(sheet);
+  } catch (error) {
+    failureMessage = error.message || String(error);
+  } finally {
+    lock.releaseLock();
+  }
+  ui.alert(failureMessage || `학생 ${targets.length}명을 완전히 삭제했습니다.`);
 }
 
 function addScoreInputRows() {
@@ -1547,7 +2852,7 @@ function collectReportInputIssues_(rows) {
         return;
       }
       scoreCount += 1;
-      if (!stringValue_(row[subject.commentColumn])) {
+      if (!getSubjectCommentValue_(row, subject)) {
         add(subject.commentColumn, '응시한 과목의 교사 코멘트를 입력하세요.');
       }
     });
@@ -1560,6 +2865,31 @@ function collectReportInputIssues_(rows) {
       if (!value) add(column, '성적표에 표시할 평가를 선택하세요.');
       else if (!RATING_OPTIONS.includes(value)) add(column, '평가 드롭다운의 선택지를 사용하세요.');
     });
+  });
+  return issues;
+}
+
+// PDF 생성 자체가 불가능한 입력만 차단합니다. 코멘트, 학년, 평가,
+// 평균그룹 누락은 출력점검에서 안내하되 PDF 생성은 계속합니다.
+function collectReportBlockingIssues_(rows) {
+  const issues = [];
+  rows.forEach(row => {
+    const name = stringValue_(row['학생 이름']);
+    const add = (field, message) => issues.push([row.__sheetRow || '', name, field, message]);
+    if (!name) add('학생 이름', '학생 이름이 없습니다.');
+    if (!isActiveEnrollment_(row)) add(ENROLLMENT_STATUS_HEADER, '퇴원 학생은 성적표 출력 대상이 아닙니다.');
+
+    let scoreCount = 0;
+    SUBJECTS.forEach(subject => {
+      const raw = stringValue_(row[subject.scoreColumn]);
+      if (!raw || raw.toLowerCase() === 'x') return;
+      if (parseScore_(row[subject.scoreColumn]) === null) {
+        add(subject.scoreColumn, `${MIN_SCORE}~${MAX_SCORE} 숫자 또는 X(미응시)를 입력하세요.`);
+        return;
+      }
+      scoreCount += 1;
+    });
+    if (!scoreCount) add('점수', '출력할 과목의 유효한 점수가 없습니다.');
   });
   return issues;
 }
@@ -1599,6 +2929,62 @@ function setOpenAiApiKey() {
 
   PropertiesService.getScriptProperties().setProperty(OPENAI_API_KEY_PROPERTY, apiKey);
   ui.alert('OpenAI API 키를 저장했습니다.');
+}
+
+function restoreMissingAiComments() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName(CONFIG.scoreSheet);
+  const ui = SpreadsheetApp.getUi();
+  if (!sheet || sheet.getLastRow() < 2) {
+    ui.alert(`'${CONFIG.scoreSheet}' 탭에 복구할 데이터가 없습니다.`);
+    return;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+  const commentHeaders = [];
+  SUBJECTS.forEach(subject => {
+    findSubjectCommentHeaders_(headers, subject).forEach(header => {
+      if (!commentHeaders.includes(header)) commentHeaders.push(header);
+    });
+  });
+
+  const backupMarker = 'AI 다듬기 전 원문: ';
+  const restored = [];
+  commentHeaders.forEach(header => {
+    const columnIndex = headers.indexOf(header) + 1;
+    if (!columnIndex) return;
+
+    const rowCount = sheet.getLastRow() - 1;
+    const range = sheet.getRange(2, columnIndex, rowCount, 1);
+    const values = range.getValues();
+    const notes = range.getNotes();
+    values.forEach((row, index) => {
+      if (stringValue_(row[0])) return;
+      const note = stringValue_(notes[index][0]);
+      const markerIndex = note.indexOf(backupMarker);
+      if (markerIndex === -1) return;
+
+      const original = note.slice(markerIndex + backupMarker.length).trim();
+      if (!original) return;
+      sheet.getRange(index + 2, columnIndex).setValue(original);
+      restored.push(`${index + 2}행 ${header}`);
+    });
+  });
+
+  if (!restored.length) {
+    ui.alert([
+      '노트에서 복구할 빈 코멘트를 찾지 못했습니다.',
+      '파일 → 버전 기록 → 버전 기록 보기에서 삭제 직전 버전을 확인하세요.',
+      '현재 파일 전체를 바로 되돌리지 말고 먼저 사본을 만든 뒤 필요한 코멘트만 가져오세요.',
+    ].join('\n'));
+    return;
+  }
+
+  ui.alert([
+    `빈 코멘트 원문 복구 완료: ${restored.length}개`,
+    restored.slice(0, 20).join('\n'),
+    restored.length > 20 ? `외 ${restored.length - 20}개` : '',
+  ].filter(Boolean).join('\n'));
 }
 
 function polishSelectedRowsComments() {
@@ -1672,48 +3058,278 @@ function polishAllComments() {
 }
 
 function polishCommentRows_(ss, sheet, startRow, targetRowCount, apiKey, title) {
-  const outputConfig = readKeyValueConfig_(ss.getSheetByName(CONFIG.outputConfigSheet));
-  const model = stringValue_(outputConfig['AI 모델']) || 'gpt-5-mini';
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
-  const values = sheet.getRange(startRow, 1, targetRowCount, sheet.getLastColumn()).getValues();
+  const properties = PropertiesService.getScriptProperties();
+  let state = readAiCommentJobState_(properties);
+  const endRow = startRow + targetRowCount - 1;
+  const isSameJob = state
+    && state.spreadsheetId === ss.getId()
+    && state.sheetName === sheet.getName()
+    && state.startRow === startRow
+    && state.endRow === endRow
+    && state.title === title;
+  if (!isSameJob) {
+    state = {
+      spreadsheetId: ss.getId(),
+      sheetName: sheet.getName(),
+      startRow,
+      endRow,
+      nextRow: startRow,
+      nextSubjectIndex: 0,
+      changedCount: 0,
+      emptyCount: 0,
+      retryCount: 0,
+      title,
+      status: 'running',
+      lastError: '',
+    };
+    properties.setProperty(AI_COMMENT_JOB_PROPERTY, JSON.stringify(state));
+  }
 
-  let changedCount = 0;
-  let skippedCount = 0;
-  const failures = [];
+  const result = runAiCommentPolishJob_(AI_COMMENT_INITIAL_RUN_MS);
+  const ui = SpreadsheetApp.getUi();
+  if (result.status === 'completed') {
+    ui.alert([
+      `${result.state.title} 완료`,
+      `변경된 코멘트: ${result.state.changedCount}개`,
+      `원문이 비어 있던 칸: ${result.state.emptyCount}개`,
+    ].join('\n'));
+    return;
+  }
 
-  values.forEach((rowValues, rowOffset) => {
-    const rowNumber = startRow + rowOffset;
-    const row = {};
-    headers.forEach((header, index) => row[header] = rowValues[index]);
+  if (result.status === 'paused') {
+    ui.alert([
+      'AI 코멘트 작업이 같은 칸에서 멈췄습니다.',
+      '다음 칸으로 건너뛰지 않았습니다.',
+      result.state.lastError,
+      'API 키나 오류 내용을 확인한 뒤 같은 메뉴를 다시 실행하면 그 칸부터 이어집니다.',
+    ].filter(Boolean).join('\n'));
+    return;
+  }
 
-    const entries = buildCommentEntriesForRow_(headers, row);
-    if (!entries.length) {
-      skippedCount += 1;
-      return;
+  if (result.status === 'retry_needed') {
+    ui.alert([
+      '일시적인 API 오류로 현재 위치에서 멈췄습니다.',
+      `현재까지 변경: ${result.state.changedCount}개`,
+      `다음 처리 위치: ${result.state.nextRow}행`,
+      `오류: ${result.state.lastError}`,
+      '다음 칸으로 건너뛰지 않았습니다.',
+      '같은 AI 코멘트 메뉴를 다시 실행하면 실패한 코멘트부터 다시 시도합니다.',
+    ].join('\n'));
+    return;
+  }
+
+  if (result.status === 'busy') {
+    ui.alert('다른 AI 코멘트 작업이 실행 중입니다. 잠시 후 같은 메뉴를 다시 실행하세요.');
+    return;
+  }
+
+  ui.alert([
+    'Apps Script 실행시간에 맞춰 현재 위치를 저장했습니다.',
+    `현재까지 변경: ${result.state.changedCount}개`,
+    `다음 처리 위치: ${result.state.nextRow}행`,
+    '같은 AI 코멘트 메뉴를 다시 실행하면 저장된 위치부터 이어집니다.',
+  ].join('\n'));
+}
+
+function runAiCommentPolishJob_(runBudgetMs) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    return { status: 'busy', state: readAiCommentJobState_() };
+  }
+
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const state = readAiCommentJobState_(properties);
+    if (!state) return { status: 'completed', state: { title: 'AI 코멘트 다듬기', changedCount: 0, emptyCount: 0 } };
+
+    let ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss || ss.getId() !== state.spreadsheetId) {
+      try {
+        ss = SpreadsheetApp.openById(state.spreadsheetId);
+      } catch (error) {
+        state.status = 'paused';
+        state.lastError = `스프레드시트를 다시 열지 못했습니다: ${error.message}`;
+        saveAiCommentJobState_(state, properties);
+        return { status: 'paused', state };
+      }
+    }
+    const sheet = ss.getSheetByName(state.sheetName);
+    if (!sheet) {
+      state.status = 'paused';
+      state.lastError = `'${state.sheetName}' 탭을 찾지 못했습니다.`;
+      saveAiCommentJobState_(state, properties);
+      return { status: 'paused', state };
     }
 
+    const apiKey = getOpenAiApiKey_();
+    if (!apiKey) {
+      state.status = 'paused';
+      state.lastError = 'OpenAI API 키가 저장되어 있지 않습니다.';
+      saveAiCommentJobState_(state, properties);
+      return { status: 'paused', state };
+    }
+
+    const outputConfig = readKeyValueConfig_(ss.getSheetByName(CONFIG.outputConfigSheet));
+    const model = stringValue_(outputConfig['AI 모델']) || 'gpt-5-mini';
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+    const startedAt = Date.now();
+
+    while (state.nextRow <= state.endRow && Date.now() - startedAt < runBudgetMs) {
+      const subject = SUBJECTS[state.nextSubjectIndex];
+      const rowValues = sheet.getRange(state.nextRow, 1, 1, headers.length).getValues()[0];
+      const row = {};
+      headers.forEach((header, index) => row[header] = rowValues[index]);
+      const entries = buildSubjectCommentEntriesForRow_(headers, row, subject);
+
+      if (!entries.length) {
+        state.emptyCount += 1;
+        advanceAiCommentJobCursor_(state);
+        continue;
+      }
+
+      try {
+        const polished = polishCommentEntriesWithRetry_(
+          entries,
+          stringValue_(row['학생 이름']),
+          model,
+          apiKey
+        );
+        const outputs = entries.map(entry => {
+          const polishedText = stringValue_(polished[entry.columnName]);
+          if (!polishedText) throw new Error(`AI가 ${entry.columnName} 코멘트를 빈칸으로 반환했습니다.`);
+          return { entry, polishedText };
+        });
+
+        writeAiCommentOutputsSafely_(sheet, headers, state.nextRow, row, outputs);
+        state.changedCount += outputs.length;
+        state.retryCount = 0;
+        state.lastError = '';
+        advanceAiCommentJobCursor_(state);
+      } catch (error) {
+        state.retryCount += 1;
+        const commentHeaders = entries.map(entry => entry.columnName).join(', ');
+        state.lastError = `${state.nextRow}행 ${commentHeaders}: ${error.message}`;
+        saveAiCommentJobState_(state, properties);
+
+        if (isPermanentAiCommentError_(error)) {
+          state.status = 'paused';
+          saveAiCommentJobState_(state, properties);
+          ss.toast(state.lastError, 'AI 코멘트 작업 멈춤', 10);
+          return { status: 'paused', state };
+        }
+
+        ss.toast(
+          `${state.lastError}\n같은 메뉴를 다시 실행하면 이 칸부터 재시도합니다.`,
+          'AI 코멘트 재시도 필요',
+          10
+        );
+        return { status: 'retry_needed', state };
+      }
+    }
+
+    SpreadsheetApp.flush();
+    if (state.nextRow > state.endRow) {
+      state.status = 'completed';
+      properties.deleteProperty(AI_COMMENT_JOB_PROPERTY);
+      ss.toast(`변경된 코멘트: ${state.changedCount}개`, `${state.title} 완료`, 10);
+      return { status: 'completed', state };
+    }
+
+    saveAiCommentJobState_(state, properties);
+    ss.toast(
+      `${state.nextRow}행부터 같은 메뉴를 다시 실행해 이어서 처리하세요.`,
+      'AI 코멘트 계속 실행 필요',
+      8
+    );
+    return { status: 'continuation', state };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function writeAiCommentOutputsSafely_(sheet, headers, rowNumber, originalRow, outputs) {
+  const lock = LockService.getDocumentLock ? LockService.getDocumentLock() : null;
+  if (lock && !lock.tryLock(5000)) throw new Error('학생·반 관리 작업 중이라 코멘트를 저장하지 않았습니다. 같은 메뉴로 다시 실행하세요.');
+  try {
+    const currentHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(stringValue_);
+    if (JSON.stringify(headers) !== JSON.stringify(currentHeaders)) {
+      throw new Error('AI 처리 중 열 구성이 바뀌어 저장하지 않았습니다.');
+    }
+    const currentRow = rowArrayToObject_(sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0], headers);
+    if ([STUDENT_ID_HEADER, ...STUDENT_CORE_HEADERS].some(header => (
+      stringValue_(originalRow[header]) !== stringValue_(currentRow[header])
+    ))) {
+      throw new Error('AI 처리 중 학생 행이 이동하거나 정보가 바뀌어 저장하지 않았습니다. 같은 메뉴로 다시 실행하세요.');
+    }
+    if (outputs.some(output => stringValue_(currentRow[output.entry.columnName]) !== output.entry.rawComment)) {
+      throw new Error('AI 처리 중 선생님이 코멘트를 수정하여 덮어쓰지 않았습니다. 같은 메뉴로 다시 실행하세요.');
+    }
+    outputs.forEach(output => {
+      const cell = sheet.getRange(rowNumber, output.entry.columnIndex);
+      preserveOriginalAiCommentNote_(cell, output.entry.rawComment);
+      cell.setValue(output.polishedText);
+    });
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
+function polishCommentEntriesWithRetry_(entries, studentName, model, apiKey) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= AI_COMMENT_SINGLE_RETRIES; attempt += 1) {
     try {
-      const studentName = stringValue_(row['학생 이름']);
-      const polished = polishCommentEntries_(entries, studentName, model, apiKey);
-      entries.forEach(entry => {
-        const polishedText = stringValue_(polished[entry.columnName]);
-        if (!polishedText) return;
-        const cell = sheet.getRange(rowNumber, entry.columnIndex);
-        cell.setValue(polishedText);
-        cell.setNote(`AI 다듬기 전 원문: ${entry.rawComment}`);
-        changedCount += 1;
-      });
+      return polishCommentEntries_(entries, studentName, model, apiKey);
     } catch (error) {
-      failures.push(`${rowNumber}행: ${error.message}`);
+      lastError = error;
+      if (isPermanentAiCommentError_(error)) break;
+      if (attempt < AI_COMMENT_SINGLE_RETRIES) {
+        Utilities.sleep(AI_COMMENT_RETRY_DELAY_MS * (attempt + 1));
+      }
     }
-  });
+  }
+  throw lastError || new Error('개별 코멘트 처리에 실패했습니다.');
+}
 
-  SpreadsheetApp.getUi().alert([
-    `${title} 완료`,
-    `변경된 코멘트: ${changedCount}개`,
-    `건너뛴 행: ${skippedCount}개`,
-    failures.length ? `실패:\n${failures.slice(0, 5).join('\n')}` : '',
-  ].filter(Boolean).join('\n'));
+function polishSingleCommentEntryWithRetry_(entry, studentName, model, apiKey) {
+  return polishCommentEntriesWithRetry_([entry], studentName, model, apiKey);
+}
+
+function advanceAiCommentJobCursor_(state) {
+  state.nextSubjectIndex += 1;
+  if (state.nextSubjectIndex < SUBJECTS.length) return;
+  state.nextSubjectIndex = 0;
+  state.nextRow += 1;
+}
+
+function preserveOriginalAiCommentNote_(cell, rawComment) {
+  const backupMarker = 'AI 다듬기 전 원문: ';
+  const existingNote = cell.getNote();
+  if (stringValue_(existingNote).includes(backupMarker)) return;
+  cell.setNote([
+    stringValue_(existingNote),
+    `${backupMarker}${rawComment}`,
+  ].filter(Boolean).join('\n\n'));
+}
+
+function isPermanentAiCommentError_(error) {
+  return /OpenAI API 오류 \((400|401|403|404)\)/.test(stringValue_(error && error.message));
+}
+
+function readAiCommentJobState_(properties) {
+  const store = properties || PropertiesService.getScriptProperties();
+  const raw = store.getProperty(AI_COMMENT_JOB_PROPERTY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    store.deleteProperty(AI_COMMENT_JOB_PROPERTY);
+    return null;
+  }
+}
+
+function saveAiCommentJobState_(state, properties) {
+  const store = properties || PropertiesService.getScriptProperties();
+  store.setProperty(AI_COMMENT_JOB_PROPERTY, JSON.stringify(state));
 }
 
 function generateAwardRankingSheet() {
@@ -1828,7 +3444,7 @@ function writeAwardRankingSheet_(ss, rankingRows) {
 
   const headerRange = sheet.getRange(1, 1, 1, headers.length);
   headerRange
-    .setBackground('#1F4E78')
+    .setBackground('#7A3F55')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center')
@@ -1843,9 +3459,22 @@ function writeAwardRankingSheet_(ss, rankingRows) {
     .setVerticalAlignment('middle');
 
   if (rankingRows.length) {
+    const backgrounds = rankingRows.map((row, index) => {
+      if (!stringValue_(row[3])) return Array(headers.length).fill('#E9EDF2');
+      return Array(headers.length).fill(index % 2 === 0 ? '#FFFFFF' : '#F8F5F6');
+    });
+    sheet.getRange(2, 1, rankingRows.length, headers.length)
+      .setBackgrounds(backgrounds)
+      .setBorder(true, true, true, true, true, true, '#D8DEE5', SpreadsheetApp.BorderStyle.SOLID);
     sheet.getRange(2, 5, rankingRows.length, 2).setNumberFormat('0.0');
     sheet.getRange(2, 7, rankingRows.length, 1).setNumberFormat('0');
     sheet.getRange(2, 3, rankingRows.length, 1).setFontWeight('bold');
+    rankingRows.forEach((row, index) => {
+      const rank = Number(row[2]);
+      if (![1, 2, 3].includes(rank) || !stringValue_(row[3])) return;
+      const color = rank === 1 ? '#F6E6A8' : (rank === 2 ? '#E4E8ED' : '#E8C5A7');
+      sheet.getRange(index + 2, 3, 1, 2).setBackground(color).setFontWeight('bold');
+    });
   }
 
   const existingFilter = sheet.getFilter();
@@ -1909,20 +3538,7 @@ function buildRosterDropdownOptions_(ss, rosterSheet, rosterHeaders) {
 }
 
 function removeLegacySyncTriggers_() {
-  try {
-    const triggers = ScriptApp.getProjectTriggers();
-    let removedCount = 0;
-    triggers.forEach(trigger => {
-      const handler = trigger.getHandlerFunction();
-      if (!LEGACY_SYNC_TRIGGER_HANDLERS.includes(handler)) return;
-      ScriptApp.deleteTrigger(trigger);
-      removedCount += 1;
-    });
-    return removedCount;
-  } catch (error) {
-    console.warn(`기존 동기화 트리거 제거 실패: ${error.message}`);
-    return 0;
-  }
+  return 0;
 }
 
 function ensureAutoSyncTrigger_() {
@@ -3131,6 +4747,7 @@ function generateReports_(targetRows, ctx) {
 
   let successCount = 0;
   let logFailureCount = 0;
+  const failures = [];
 
   targetRows.forEach((row, index) => {
     try {
@@ -3141,21 +4758,20 @@ function generateReports_(targetRows, ctx) {
 
     let logEntry;
     try {
-      const issues = collectReportInputIssues_([row]);
+      const issues = collectReportBlockingIssues_([row]);
       if (issues.length) throw new Error(issues.map(issue => `${issue[2]}: ${issue[3]}`).join(' / '));
       const report = buildReportData_(row, ctx);
       if (!report.subjects.length) throw new Error('입력된 성적 과목이 없습니다.');
 
       const html = renderReportHtml_(report);
-      const blob = Utilities
-        .newBlob(html, MimeType.HTML, `${report.fileBaseName}.html`)
-        .getAs(MimeType.PDF)
-        .setName(`${report.fileBaseName}.pdf`);
+      const blob = convertReportHtmlToPdfBlob_(html, report.fileBaseName);
       const file = folder.createFile(blob);
 
       successCount += 1;
       logEntry = [new Date(), report.month, report.className, report.studentName, '성공', file.getName(), file.getUrl()];
     } catch (error) {
+      const studentName = stringValue_(row['학생 이름']) || `${row.__sheetRow || '?'}행`;
+      failures.push(`${studentName}: ${error.message}`);
       logEntry = [
         new Date(),
         stringValue_(ctx.outputConfig['출력월']) || '2026년 6월',
@@ -3174,8 +4790,32 @@ function generateReports_(targetRows, ctx) {
     '성적표 생성 완료',
     `성공: ${successCount}명`,
     `실패: ${targetRows.length - successCount}명`,
+    failures.length ? `실패 내용:\n${failures.slice(0, 5).join('\n')}` : '',
+    failures.length > 5 ? `외 ${failures.length - 5}명은 '${CONFIG.logSheet}' 시트에서 확인하세요.` : '',
     logFailureCount ? `생성로그 기록 실패: ${logFailureCount}건` : '',
   ].filter(Boolean).join('\n'));
+}
+
+function convertReportHtmlToPdfBlob_(html, fileBaseName) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= PDF_CONVERSION_ATTEMPTS; attempt += 1) {
+    try {
+      const blob = Utilities
+        .newBlob(html, MimeType.HTML, `${fileBaseName}.html`)
+        .getAs(MimeType.PDF)
+        .setName(`${fileBaseName}.pdf`);
+      if (!blob.getBytes().length) throw new Error('변환된 PDF 파일이 비어 있습니다.');
+      return blob;
+    } catch (error) {
+      lastError = error;
+      if (attempt < PDF_CONVERSION_ATTEMPTS) {
+        Utilities.sleep(PDF_CONVERSION_RETRY_DELAY_MS * attempt);
+      }
+    }
+  }
+
+  throw new Error(`PDF 변환을 ${PDF_CONVERSION_ATTEMPTS}회 시도했지만 실패했습니다: ${lastError.message}`);
 }
 
 function loadContext_() {
@@ -3207,9 +4847,21 @@ function buildReportData_(studentRow, ctx) {
       average,
       basisColumn: averageGroup.basisColumn,
       basisValue: averageGroup.basisValue,
-      comment: stringValue_(studentRow[subject.commentColumn]),
+      comment: getSubjectCommentValue_(studentRow, subject),
     };
   }).filter(Boolean);
+
+  const attitudeRows = [
+    { label: 'Vocabulary', value: stringValue_(studentRow['Vocabulary']) },
+    { label: 'Homework', value: stringValue_(studentRow['Homework']) },
+    { label: 'Participation', value: stringValue_(studentRow['Participation']) },
+  ].filter(item => item.value);
+  const textbookRows = [
+    { label: 'Vocabulary', value: stringValue_(studentRow['Vocabulary 교재명']) },
+    { label: 'Writing/Grammar', value: stringValue_(studentRow['Writing/Grammar 교재명']) },
+    { label: 'Reading/Listening', value: stringValue_(studentRow['Reading/Listening 교재명']) },
+  ].filter(item => item.value);
+  const commentSubjects = subjects.filter(subject => stringValue_(subject.comment));
 
   return {
     title,
@@ -3224,9 +4876,14 @@ function buildReportData_(studentRow, ctx) {
     vocabularyBook: stringValue_(studentRow['Vocabulary 교재명']),
     writingGrammarBook: stringValue_(studentRow['Writing/Grammar 교재명']),
     readingListeningBook: stringValue_(studentRow['Reading/Listening 교재명']),
+    attitudeRows,
+    textbookRows,
+    commentSubjects,
+    hasAnyAverage: subjects.some(subject => subject.average !== null),
     subjects,
     subjectCount: subjects.length,
     isTwoSubject: subjects.length <= 2,
+    isTwoCommentSubject: commentSubjects.length <= 2,
     fileBaseName: makeFileBaseName_(studentRow, month, ctx.outputConfig),
     logoDataUri: LOGO_DATA_URI,
   };
@@ -3330,6 +4987,15 @@ function appendLogs_(logs) {
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.logSheet);
     sheet.appendRow(['생성일시', '월', '반 이름', '학생 이름', '상태', 'PDF 파일명', '메시지']);
+    sheet.getRange(1, 1, 1, 7)
+      .setBackground('#4B5563')
+      .setFontColor('#FFFFFF')
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center');
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidths(1, 5, 120);
+    sheet.setColumnWidth(6, 260);
+    sheet.setColumnWidth(7, 380);
   }
   sheet.getRange(sheet.getLastRow() + 1, 1, logs.length, logs[0].length).setValues(logs);
 }
@@ -3345,12 +5011,21 @@ function appendLogsSafely_(logs) {
 }
 
 function buildCommentEntriesForRow_(headers, row) {
-  return SUBJECTS.map(subject => {
-    const columnIndex = headers.indexOf(subject.commentColumn) + 1;
-    const rawComment = stringValue_(row[subject.commentColumn]);
+  const entries = [];
+  SUBJECTS.forEach(subject => {
+    buildSubjectCommentEntriesForRow_(headers, row, subject)
+      .forEach(entry => entries.push(entry));
+  });
+  return entries;
+}
+
+function buildSubjectCommentEntriesForRow_(headers, row, subject) {
+  return findSubjectCommentHeaders_(headers, subject).map(commentHeader => {
+    const columnIndex = headers.indexOf(commentHeader) + 1;
+    const rawComment = stringValue_(row[commentHeader]);
     if (!columnIndex || !rawComment) return null;
     return {
-      columnName: subject.commentColumn,
+      columnName: commentHeader,
       columnIndex,
       subjectName: subject.name || subject.key,
       rawComment,
@@ -3358,9 +5033,177 @@ function buildCommentEntriesForRow_(headers, row) {
   }).filter(Boolean);
 }
 
+function getSubjectCommentHeaders_(subject) {
+  return [subject.commentColumn, ...(subject.commentAliases || [])]
+    .filter((header, index, headers) => header && headers.indexOf(header) === index);
+}
+
+function normalizeCommentHeader_(value) {
+  return stringValue_(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9가-힣]/g, '');
+}
+
+function findSubjectCommentHeaders_(headers, subject) {
+  const candidateKeys = getSubjectCommentHeaders_(subject).map(normalizeCommentHeader_);
+  return (headers || []).filter((header, index, allHeaders) => (
+    header
+    && allHeaders.indexOf(header) === index
+    && candidateKeys.includes(normalizeCommentHeader_(header))
+  ));
+}
+
+function findSubjectCommentHeader_(headers, row, subject) {
+  const candidates = findSubjectCommentHeaders_(headers, subject);
+  if (!candidates.length) return subject.commentColumn;
+  if (row) {
+    const filledHeader = candidates.find(header => stringValue_(row[header]));
+    if (filledHeader) return filledHeader;
+  }
+  return candidates[0];
+}
+
+function getSubjectCommentValue_(row, subject) {
+  const header = findSubjectCommentHeaders_(Object.keys(row || {}), subject)
+    .find(candidate => stringValue_(row[candidate]));
+  return header ? stringValue_(row[header]) : '';
+}
+
 function polishCommentEntries_(entries, studentName, model, apiKey) {
+  if (!entries || !entries.length) return {};
+
+  const response = UrlFetchApp.fetch(
+    OPENAI_API_ENDPOINT,
+    buildPolishCommentRequestOptions_(entries, studentName, model, apiKey)
+  );
+  return parsePolishCommentResponse_(response, entries, studentName);
+}
+
+function buildPolishCommentRequestOptions_(entries, studentName, model, apiKey) {
+  return {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    payload: JSON.stringify(buildPolishCommentPayload_(entries, studentName, model)),
+    muteHttpExceptions: true,
+  };
+}
+
+function buildPolishCommentPayload_(entries, studentName, model) {
+  const instructions = [
+    '[역할과 교육 방향]',
+    '너는 월드프렙학원의 담당 교사가 학부모에게 보내는 학습 코멘트를 다듬는 편집자다.',
+    '월드프렙학원은 알파영어논술을 통해 영어 어순구조를 이해하고 체화하여 읽기·쓰기·듣기·말하기에 적용하도록 지도한다.',
+    '교육 기준은 원문을 이해하기 위한 배경이다. 학생이 해당 능력을 갖추었거나 해당 지도를 받고 있다는 근거로 사용하지 않는다.',
+
+    '[최우선 원칙: 사실과 의미 보존]',
+    '원문에 담긴 관찰, 평가 강도, 학생의 현재 학습 수준과 구체적인 사례를 유지한다.',
+    '입력에 없는 성과, 발전, 노력, 성실함, 학습 태도, 교재, 진도, 지도 방법, 향후 계획을 만들지 않는다.',
+    '원문에 없는 칭찬을 보완점 앞에 형식적으로 붙이지 않는다.',
+    '이전보다 좋아졌다는 표현은 원문에 변화의 근거가 있을 때만 사용한다.',
+    '학생의 성격이나 능력을 부정적으로 단정하거나 다른 학생과 비교하지 않는다.',
+    '사실 보존은 구성 순서, 문장 수, 따뜻한 표현보다 우선한다.',
+    '표현을 부드럽게 바꾸더라도 어려움의 정도와 빈도를 축소하거나 과장하지 않는다.',
+
+    '[이름 사용: 본문만 작성]',
+    '호출 프로그램이 코멘트 앞에 우리 이름이는 또는 우리 이름는 호칭을 자동으로 붙인다. 너는 이름과 호칭을 제외한 본문만 작성한다.',
+    '학생 이름이나 OO이는, OO학생은 같은 호칭으로 시작하지 않는다.',
+    '이 학생은, 해당 학생은, 아이는 등의 대체 주어도 반복해서 넣지 않는다.',
+    '학습 내용이나 수업에서 보인 모습으로 바로 문장을 시작한다.',
+
+    '[따뜻하고 자연스러운 문체]',
+    '평가 보고서처럼 차갑게 판정하지 말고, 학생을 가까이에서 지도한 교사가 학부모에게 설명하는 말투로 작성한다.',
+    '전문적이면서도 편안하고 다정한 존댓말을 사용한다.',
+    '학습 역량이 미흡합니다, 수행 능력이 부족합니다, 개선이 요구됩니다 같은 추상적이고 딱딱한 판정 표현을 피한다.',
+    '대신 어떤 학습 상황에서 무엇을 어려워하는지 구체적으로 설명한다.',
+    '강점이 입력되어 있으면 그 강점이 자연스럽게 드러나도록 쓰고, 보완점으로 곧바로 무효화하지 않는다.',
+    '강점 다음 문장마다 하지만, 다만, 그러나를 기계적으로 붙이지 않는다.',
+    '보완점은 학생 전체의 능력에 대한 평가가 아니라 현재 학습 중 나타나는 구체적인 어려움으로 표현한다.',
+    '따뜻함은 관찰을 세심하게 설명하는 방식으로 표현하고, 과장된 칭찬이나 감정적인 수식어로 만들지 않는다.',
+    '기특합니다, 대견합니다, 놀랍습니다, 앞으로가 매우 기대됩니다 같은 표현을 원문에 근거 없이 추가하지 않는다.',
+    '추상적인 교육 용어를 늘어놓기보다 학부모가 쉽게 이해할 수 있는 표현을 사용한다.',
+    '교사가 적은 구체적인 사례와 학생별 특징을 살린다.',
+    '같은 의미의 칭찬이나 보완점을 여러 문장으로 반복하지 않는다.',
+
+    '[과목별 편집 범위]',
+    '각 코멘트는 해당 입력 항목의 comment만 근거로 작성한다.',
+    '다른 과목의 관찰이나 지도 내용을 가져와 섞지 않는다.',
+    '원문에서 명시한 과목 간 연결은 유지할 수 있다.',
+    '과목명이나 교재명만 보고 학습 수준과 능력을 추정하지 않는다.',
+
+    '[Writing(Alpha): 어순구조 및 영작]',
+    '원문에 있는 주어·동작·대상 구분, 기본 어순, 문장 구성과 확장, 전치사구, 문법 적용, 누적 기억, 응용력, 표현력, 정확도를 중심으로 정리한다.',
+    '개념을 이해하는 것과 실제 영작에 적용하는 것을 구분한다.',
+    '어순구조 체화나 문법 적용을 위한 지도는 원문에 명시된 경우에만 설명한다.',
+
+    '[Reading: 구조독해 및 독해력]',
+    '원문에 있는 문장 핵심 요소 파악, 직독직해, 수식어구와 구문 분석, 문장 간 흐름, 중심 내용, 세부 정보, 근거 찾기, 어휘·문법 적용을 중심으로 정리한다.',
+    '문장을 해석하는 능력과 문제를 정확하게 푸는 능력을 구분한다.',
+    '직독직해, 구문 분석, 요약, 근거 찾기 등의 지도는 원문에 있는 내용만 반영한다.',
+
+    '[Grammar: 문법 이해 및 활용]',
+    '원문에 있는 개념 이해, 규칙 구분과 기억, 인칭·수일치·시제·조동사 적용, 문장 구성, 문제 유형 이해, 유사 개념 구분, 누적 활용을 중심으로 정리한다.',
+    '문법 개념 이해력, 문제풀이 정확도, 영작 적용 능력을 각각 구분한다.',
+    '문법을 어순구조와 연결하는 지도는 원문에 있을 때만 반영한다.',
+
+    '[Book Club: 영어 원서독서]',
+    '원문에 원서독서나 Book Club 관찰이 있을 때만 반영한다.',
+    '읽기 흥미와 참여, 문맥 속 어휘 이해, 이야기 흐름, 인물과 상황 이해, 핵심 내용 설명, 표현 습득, 독서 실천과 과제 수행 중 실제 입력된 내용을 정리한다.',
+    '독서량이 많다는 이유로 내용 이해력이나 자기주도성이 높다고 단정하지 않는다.',
+    '별도의 Book Club 키를 만들거나 다른 코멘트 열로 내용을 옮기지 않는다.',
+
+    '[Listening,Speaking: 듣기와 말하기]',
+    '듣기는 원문에 있는 소리 구별, 문장 이해, 핵심·세부 정보, 대화 상황과 목적, 정답 근거, 오답 원인을 중심으로 정리한다.',
+    '말하기는 원문에 실제 관찰이 있을 때만 표현, 문장 구성, 발화 등의 내용을 정리한다.',
+    '듣기 성적이 좋다는 이유로 말하기 능력도 좋다고 추론하지 않는다.',
+    '듣기만 입력되면 듣기만, 말하기만 입력되면 말하기만 작성한다.',
+    '반복 듣기나 핵심 표현 확인 등의 지도는 원문에 있는 경우에만 반영한다.',
+
+    '[구성 순서]',
+    '입력에 근거가 있는 요소를 다음 순서로 자연스럽게 연결한다.',
+    '1. 잘한 점: 실제 관찰된 강점 또는 근거가 있는 발전.',
+    '2. 보완할 점: 현재 어려워하는 개념, 상황, 반복되는 오류.',
+    '3. 학원에서 개선 중인 부분: 실제로 진행 중이라고 입력된 지도.',
+    '4. 앞으로 기대하는 부분: 원문에 명시된 향후 계획이나 학습 목표.',
+    '정보가 없는 요소는 생략한다. 네 요소를 채우려고 내용을 만들지 않는다.',
+    '원문이 보완점만 담고 있으면 칭찬이나 지도 계획을 새로 만들지 않고 해당 내용을 부드럽고 정확하게 정리한다.',
+
+    '[시제와 끝맺음]',
+    '학생의 현재 학습 모습은 합니다·있습니다 등의 현재형으로 서술한다.',
+    '학원에서 현재 진행 중인 지도는 지도하고 있습니다·연습하고 있습니다처럼 진행형으로 서술하며, 지도합니다로 끝내지 않는다.',
+    '원문에 명시된 향후 지도 계획은 지도하겠습니다·돕겠습니다 등 미래형으로 서술한다.',
+    '현재 진행 중인 지도를 향후 계획으로 바꾸거나 향후 계획을 이미 진행 중인 지도처럼 쓰지 않는다.',
+    '향후 계획이 입력되지 않았다면 억지로 지도하겠습니다로 마무리하지 않는다.',
+
+    '[분량과 형식]',
+    '기본 3~5문장을 목표로 하되, 원문이 짧으면 1~2문장도 허용한다.',
+    '문장 수를 채우기 위해 내용을 늘리거나 반복하지 않는다.',
+    '원문에 중요한 관찰이 많으면 누락하지 않도록 문장 수를 유연하게 조절한다.',
+    '소제목, 번호, 글머리표 없이 자연스럽게 이어지는 한 문단으로 작성한다.',
+    '메모형 표현과 문법 오류는 학부모에게 바로 전달할 수 있는 완성 문장으로 정리한다.',
+
+    '[표현 참고 예시]',
+    '다음 예시는 말투만 참고한다. 예시에 있는 관찰이나 지도를 실제 코멘트에 가져오지 않는다.',
+    '원문: 어순 이해 잘함. 긴 문장에서 관사 자주 빠뜨림. 작성 후 관사 확인하게 하는 중.',
+    '결과: 영어 어순을 잘 이해하고 있습니다. 긴 문장을 쓸 때는 관사를 빠뜨리는 경우가 잦아, 문장을 완성한 뒤 관사를 다시 살펴보도록 지도하고 있습니다.',
+    '원문: 해석 정확함. 근거 안 찾고 답 고르는 경우 있음. 앞으로 근거 표시 연습할 예정.',
+    '결과: 문장의 의미를 정확하게 해석합니다. 문제를 풀 때는 지문에서 근거를 확인하지 않고 답을 고르는 경우가 있어, 앞으로 답의 근거를 직접 표시하며 확인하는 연습을 돕겠습니다.',
+
+    '[출력 형식: 반드시 준수]',
+    'JSON 객체 하나만 반환한다. 마크다운이나 JSON 밖 설명은 출력하지 않는다.',
+    '입력 comments 배열의 columnName을 JSON 키로 정확히 사용한다.',
+    '모든 입력 columnName에 대응하는 키를 빠짐없이 반환한다.',
+    '입력에 없는 키는 추가하지 않는다.',
+    '각 키의 값은 완성된 한국어 코멘트 문자열 하나여야 한다.',
+    '배열, 중첩 객체, null을 값으로 반환하지 않는다.',
+    '원문이 비어 있다면 해당 값도 빈 문자열로 반환한다.',
+    '출력 전 이름이 들어가지 않았는지, 원문에 없는 사실을 추가하지 않았는지, 과목별 columnName이 정확한지 확인한다.',
+  ].join('\n');
+
   const promptData = {
-    studentName,
+    studentName: stringValue_(studentName),
     comments: entries.map(entry => ({
       columnName: entry.columnName,
       subjectName: entry.subjectName,
@@ -3370,54 +5213,120 @@ function polishCommentEntries_(entries, studentName, model, apiKey) {
 
   const payload = {
     model,
+    max_output_tokens: 8000,
     input: [
       {
         role: 'system',
-        content: [
-          'You rewrite brief Korean teacher notes into warm parent-facing comments for elementary English academy report cards.',
-          'Return a JSON object only. Do not wrap it in markdown.',
-          'Use the exact input columnName values as JSON keys.',
-          'Each value must be one natural Korean sentence ending with 습니다 or 좋겠습니다.',
-          'Keep the original meaning. Do not invent achievements, scores, diagnoses, or facts.',
-          'Tone: kind, professional, specific, and balanced.',
-          'If the note is negative, acknowledge effort first, then mention the improvement area gently.',
-          'Every sentence must include both the current observation and a future teaching direction.',
-          'The teaching direction should be concrete but concise, such as guided review, repeated practice, careful checking, vocabulary reinforcement, sentence pattern practice, or listening-focused activities.',
-          'Do not say only what the student lacks; also describe how the teacher will support improvement.',
-          'Example: "스펠링 실수가 잦음" -> "수업에 성실히 참여하고 있으나 스펠링에서 실수가 잦아, 앞으로 단어 확인과 문장 작성 후 검토 습관을 함께 지도하겠습니다."',
-          'Example: "어순 구조 이해 잘함, 기초문법 실수 잦음, 표현력 우수" -> "어순과 문장 구조를 잘 이해하고 표현력이 우수하지만 기초 문법 실수가 잦아, 앞으로 문장 작성 후 핵심 문법을 점검하는 훈련을 함께 지도하겠습니다."',
-        ].join('\n'),
+        content: instructions,
       },
       {
         role: 'user',
         content: JSON.stringify(promptData),
       },
     ],
+    text: {
+      format: buildPolishCommentOutputFormat_(entries),
+    },
   };
 
-  const response = UrlFetchApp.fetch(OPENAI_API_ENDPOINT, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
+  return payload;
+}
+
+function buildPolishCommentOutputFormat_(entries) {
+  const properties = {};
+  const required = [];
+  entries.forEach(entry => {
+    properties[entry.columnName] = { type: 'string' };
+    required.push(entry.columnName);
   });
 
+  return {
+    type: 'json_schema',
+    name: 'report_card_comments',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties,
+      required,
+      additionalProperties: false,
+    },
+  };
+}
+
+function parsePolishCommentResponse_(response, entries, studentName) {
   const responseCode = response.getResponseCode();
   const responseText = response.getContentText();
   if (responseCode < 200 || responseCode >= 300) {
     throw new Error(`OpenAI API 오류 (${responseCode}): ${responseText.slice(0, 500)}`);
   }
 
-  const responseJson = JSON.parse(responseText);
+  let responseJson;
+  try {
+    responseJson = JSON.parse(responseText);
+  } catch (error) {
+    throw new Error(`OpenAI 응답 본문을 읽지 못했습니다: ${error.message}`);
+  }
+
+  if (responseJson.status === 'incomplete') {
+    throw new Error('AI 응답이 끝까지 생성되지 않았습니다.');
+  }
+
   const outputText = extractOpenAiOutputText_(responseJson);
   if (!outputText) {
     throw new Error('OpenAI 응답에서 코멘트 내용을 찾지 못했습니다.');
   }
 
-  return parseJsonObjectFromText_(outputText);
+  const polished = parseJsonObjectFromText_(outputText);
+  if (!polished || typeof polished !== 'object' || Array.isArray(polished)) {
+    throw new Error('AI 응답이 올바른 JSON 객체가 아닙니다.');
+  }
+
+  const result = {};
+  entries.forEach(entry => {
+    const key = entry.columnName;
+    if (!Object.prototype.hasOwnProperty.call(polished, key)) {
+      throw new Error(`AI 응답에 ${key} 항목이 없습니다.`);
+    }
+    if (typeof polished[key] !== 'string') {
+      throw new Error(`AI 응답의 ${key} 항목이 문자열이 아닙니다.`);
+    }
+
+    const text = polished[key].trim();
+    if (stringValue_(entry.rawComment) && !text) {
+      throw new Error(`AI가 ${key} 코멘트를 빈칸으로 반환했습니다.`);
+    }
+    result[key] = text ? addStudentOpeningToComment_(text, studentName) : '';
+  });
+
+  return result;
+}
+
+function addStudentOpeningToComment_(value, studentName) {
+  let text = stringValue_(value);
+  const fullName = stringValue_(studentName).replace(/\s+/g, '');
+  const shortName = Array.from(fullName).slice(1, 3).join('');
+  if (!shortName) return text;
+
+  const lastLetter = shortName.charCodeAt(shortName.length - 1);
+  const isHangul = lastLetter >= 0xAC00 && lastLetter <= 0xD7A3;
+  const hasBatchim = isHangul && (lastLetter - 0xAC00) % 28 !== 0;
+  const opening = `우리 ${shortName}${hasBatchim ? '이는' : '는'}`;
+
+  [fullName, shortName]
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .forEach(name => {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const prefix = new RegExp(
+        '^(?:우리\\s*)?' + escaped + '\\s*' +
+        '(?:학생(?:은|는|이|가)?|어린이(?:는|가)?|이는|이가|은|는|이|가)?' +
+        '(?:\\s+|[,，:：]\\s*|$)'
+      );
+      text = text.replace(prefix, '').trim();
+    });
+
+  if (!text) throw new Error('AI 코멘트에 이름 외의 내용이 없습니다.');
+  return `${opening} ${text}`;
 }
 
 function extractOpenAiOutputText_(responseJson) {
@@ -3470,14 +5379,11 @@ function makeFileBaseName_(row, month, outputConfig) {
 }
 
 function shouldGenerate_(row) {
-  return Boolean(stringValue_(row && row['학생 이름'])) && isActiveEnrollment_(row);
+  return Boolean(stringValue_(row && row['학생 이름']));
 }
 
 function isActiveEnrollment_(row) {
-  const value = row ? row[ENROLLMENT_STATUS_HEADER] : '';
-  if (value === false) return false;
-  const text = stringValue_(value).toLowerCase();
-  return !['퇴원', '휴원', 'false', 'n', 'no', '0', '중지', 'x'].includes(text);
+  return Boolean(stringValue_(row && row['학생 이름']));
 }
 
 function parseScore_(value) {

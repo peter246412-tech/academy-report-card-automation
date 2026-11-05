@@ -416,14 +416,14 @@
         width: 95pt;
         font-weight: 700;
         font-size: 12pt;
-        height: <?= report.isTwoSubject ? '74pt' : '42pt' ?>;
+        height: <?= report.isTwoCommentSubject ? '74pt' : '42pt' ?>;
         text-align: center;
         vertical-align: middle;
       }
 
       .comment-text {
         width: 336pt;
-        min-height: <?= report.isTwoSubject ? '74pt' : '42pt' ?>;
+        min-height: <?= report.isTwoCommentSubject ? '74pt' : '42pt' ?>;
         font-size: 11pt;
         line-height: 1.45;
         white-space: pre-wrap;
@@ -440,36 +440,35 @@
       <img class="logo" src="<?!= report.logoDataUri ?>" alt="World Prep">
       <div class="main-title"><?= report.title ?></div>
       <div class="student-line">
-        Name: <b><?= report.studentName ?></b>&nbsp;&nbsp;
-        Grade: <b><?= report.grade ?></b>&nbsp;&nbsp;
-        Class: <b><?= report.className ?></b>
+        Name: <b><?= report.studentName ?></b>
+        <? if (report.grade) { ?>&nbsp;&nbsp;Grade: <b><?= report.grade ?></b><? } ?>
+        <? if (report.className) { ?>&nbsp;&nbsp;Class: <b><?= report.className ?></b><? } ?>
       </div>
 
+      <? if (report.attitudeRows.length) { ?>
       <table class="attitude-table">
         <tr>
           <td class="left bold">Attitude</td>
           <td class="right small-bold">Need Improvement/Good/Perfect</td>
         </tr>
-        <tr>
-          <td>Vocabulary</td>
-          <td><?= report.vocabularyRating ?></td>
-        </tr>
-        <tr>
-          <td>Homework</td>
-          <td><?= report.homework ?></td>
-        </tr>
-        <tr>
-          <td>Participation</td>
-          <td><?= report.participation ?></td>
-        </tr>
+        <? for (var attitudeIndex = 0; attitudeIndex < report.attitudeRows.length; attitudeIndex++) {
+          var attitude = report.attitudeRows[attitudeIndex]; ?>
+          <tr>
+            <td><?= attitude.label ?></td>
+            <td><?= attitude.value ?></td>
+          </tr>
+        <? } ?>
       </table>
+      <? } ?>
 
       <div class="chart-block">
         <table class="chart-heading">
           <tr>
             <td class="chart-title">Achievement Rate</td>
             <td class="chart-legend">
-              <span class="legend-item">평균:<span class="legend-swatch legend-average"></span></span>
+              <? if (report.hasAnyAverage) { ?>
+                <span class="legend-item">평균:<span class="legend-swatch legend-average"></span></span>
+              <? } ?>
               <span class="legend-item">학생점수:<span class="legend-swatch legend-student"></span></span>
             </td>
           </tr>
@@ -530,27 +529,25 @@
         </table>
       </div>
 
+      <? if (report.textbookRows.length) { ?>
       <table class="textbook-table">
         <tr>
           <td class="textbook-title" colspan="2">TEXTBOOK</td>
         </tr>
-        <tr>
-          <td class="textbook-label">Vocabulary</td>
-          <td class="textbook-value"><?= report.vocabularyBook ?></td>
-        </tr>
-        <tr>
-          <td class="textbook-label">Writing/Grammar</td>
-          <td class="textbook-value"><?= report.writingGrammarBook ?></td>
-        </tr>
-        <tr>
-          <td class="textbook-label">Reading/Listening</td>
-          <td class="textbook-value"><?= report.readingListeningBook ?></td>
-        </tr>
+        <? for (var textbookIndex = 0; textbookIndex < report.textbookRows.length; textbookIndex++) {
+          var textbook = report.textbookRows[textbookIndex]; ?>
+          <tr>
+            <td class="textbook-label"><?= textbook.label ?></td>
+            <td class="textbook-value"><?= textbook.value ?></td>
+          </tr>
+        <? } ?>
       </table>
+      <? } ?>
 
       <img class="logo bottom-logo" src="<?!= report.logoDataUri ?>" alt="World Prep">
     </div>
 
+    <? if (report.commentSubjects.length) { ?>
     <div class="page comments-page">
       <div class="semester-heading">
         <span class="heading-icon"><span class="bar-1"></span><span class="bar-2"></span><span class="bar-3"></span></span><?= report.commentSectionTitle ?>
@@ -560,8 +557,8 @@
           <td class="comment-head-left">Skill</td>
           <td class="comment-head-right">Teacher’s Comments</td>
         </tr>
-        <? for (var j = 0; j < report.subjects.length; j++) {
-          var item = report.subjects[j]; ?>
+        <? for (var j = 0; j < report.commentSubjects.length; j++) {
+          var item = report.commentSubjects[j]; ?>
           <tr>
             <td class="comment-skill"><?= item.name ?></td>
             <td class="comment-text"><?= item.comment || '' ?></td>
@@ -572,5 +569,6 @@
       <div style="height: 48px;"></div>
       <img class="logo" src="<?!= report.logoDataUri ?>" alt="World Prep">
     </div>
+    <? } ?>
   </body>
 </html>

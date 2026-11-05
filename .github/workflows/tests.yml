@@ -1,0 +1,21 @@
+name: Regression Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run synthetic-data regression tests
+        run: node --test tests/new-student.test.cjs tests/quarter-reset.test.cjs tests/workflows.test.cjs
