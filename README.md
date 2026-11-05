@@ -6,6 +6,18 @@ Built with Google Sheets, Google Apps Script, HTML/CSS, Google Drive PDF export,
 
 **Current release:** November 2026. The original commit history and [development case study](PORTFOLIO_CASE_STUDY.md) trace the project from its first report generator through the current operating model.
 
+## Actual Application Captures
+
+| Score-entry sheet | Class award ranking |
+|:---:|:---:|
+| ![Actual score-entry sheet with student names covered](docs/images/real-score-entry.png) | ![Actual award-ranking sheet with student names covered](docs/images/real-award-ranking.png) |
+| **Generated report: assessment page** | **Generated report: teacher comments** |
+| ![First page of an actual generated PDF with the student name covered](docs/images/real-report-page-1.png) | ![Second page of the actual PDF with the name in the comment covered](docs/images/real-report-page-2.png) |
+| **Class settings** | **Output settings** |
+| ![Actual class-settings sheet](docs/images/real-class-settings.png) | ![Actual output-settings sheet](docs/images/real-output-settings.png) |
+
+These are user-supplied screenshots and rasterized pages of an actual generated report, not reconstructed interfaces. Student names are covered with opaque masks, including names inside comments. Other displayed values and original labels are retained as supplied; captures may reflect different reporting dates or workbook revisions. See the [image provenance note](docs/images/README.md). The original unredacted screenshots and PDF are not published.
+
 ## Why I Built It
 
 I began working as an assistant English instructor at an elementary English academy during the summer break of my third year at university. I was hired to support lessons, not to develop software. Soon after joining, however, I saw the staff preparing a major reporting cycle for approximately 80 students.
@@ -209,4 +221,4 @@ Document locks coordinate cooperating script operations, not a teacher's direct 
 
 ## Privacy and Responsible Use
 
-The public repository contains code, templates, and synthetic test fixtures. Legacy illustration assets in `docs/images` are reconstructed mockups, not screenshots of the actual program; see their [provenance note](docs/images/README.md). Production rosters, real assessment records, generated PDFs, API keys, workbook backups, and the temporary one-time roster migration script are not included. AI-based comment polishing is optional, and secrets are stored in Script Properties rather than source code. Enabling it sends student names and selected teacher comments to the API; obtain the academy's approval and follow its student-data policy before use.
+The public repository contains code, templates, synthetic test fixtures, and actual application captures with student names redacted. The captures retain the displayed assessment figures and class labels; name redaction is not a guarantee against all possible re-identification. Raw rosters, editable production workbooks, unredacted images, original PDF files, API keys, workbook backups, and the temporary one-time roster migration script are not included. Older illustration files are separately labeled as mockups in the [image provenance note](docs/images/README.md) and are not used in the gallery. AI-based comment polishing is optional, and secrets are stored in Script Properties rather than source code. Enabling it sends student names and selected teacher comments to the API; obtain the academy's approval and follow its student-data policy before use.
