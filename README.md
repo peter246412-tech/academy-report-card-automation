@@ -4,18 +4,6 @@
 
 Built with Google Sheets, Google Apps Script, HTML/CSS, Google Drive PDF export, and the OpenAI Responses API.
 
-## At a Glance
-
-| Score-entry workflow | Report-generation menu |
-|:---:|:---:|
-| ![Anonymized score input sheet](docs/images/01-score-input.png) | ![Report generation menu in Google Sheets](docs/images/02-generate-menu.png) |
-| **Generated report card** | **Automated award ranking** |
-| ![Anonymized PDF report card](docs/images/03-report-card-pdf.png) | ![Automated ranking sheet](docs/images/04-award-ranking.png) |
-
-_All screenshots contain anonymized demonstration data. No real student information is included in this repository._
-
-These images document earlier iterations. The current menu and operating instructions are described below; older roster and synchronization controls are not part of the final workflow.
-
 **Current release:** November 2026. The original commit history and [development case study](PORTFOLIO_CASE_STUDY.md) trace the project from its first report generator through the current operating model.
 
 ## Why I Built It
@@ -221,4 +209,4 @@ Document locks coordinate cooperating script operations, not a teacher's direct 
 
 ## Privacy and Responsible Use
 
-The public repository contains code, templates, synthetic test fixtures, and anonymized demonstrations only. Production rosters, real assessment records, generated PDFs, API keys, workbook backups, and the temporary one-time roster migration script are not included. AI-based comment polishing is optional, and secrets are stored in Script Properties rather than source code. Enabling it sends student names and selected teacher comments to the API; obtain the academy's approval and follow its student-data policy before use.
+The public repository contains code, templates, and synthetic test fixtures. Legacy illustration assets in `docs/images` are reconstructed mockups, not screenshots of the actual program; see their [provenance note](docs/images/README.md). Production rosters, real assessment records, generated PDFs, API keys, workbook backups, and the temporary one-time roster migration script are not included. AI-based comment polishing is optional, and secrets are stored in Script Properties rather than source code. Enabling it sends student names and selected teacher comments to the API; obtain the academy's approval and follow its student-data policy before use.
