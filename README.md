@@ -14,6 +14,10 @@ Built with Google Sheets, Google Apps Script, HTML/CSS, Google Drive PDF export,
 
 _All screenshots contain anonymized demonstration data. No real student information is included in this repository._
 
+These images document earlier iterations. The current menu and operating instructions are described below; older roster and synchronization controls are not part of the final workflow.
+
+**Current release:** November 2026. The original commit history and [development case study](PORTFOLIO_CASE_STUDY.md) trace the project from its first report generator through the current operating model.
+
 ## Why I Built It
 
 I began working as an assistant English instructor at an elementary English academy during the summer break of my third year at university. I was hired to support lessons, not to develop software. Soon after joining, however, I saw the staff preparing a major reporting cycle for more than 200 students.
@@ -26,12 +30,15 @@ I proposed keeping the Google Sheets interface that staff already knew and using
 
 ```mermaid
 flowchart TD
-    A[Manage students and classes in the score-entry sheet] --> B[Keep one source of truth]
+    A[Manage student records in the score-entry sheet] --> B[Keep one source of truth]
+    J[Manage classes in class settings] --> A
     B --> C[Enter scores, ratings, books, and comments]
     C --> D[Calculate class and grammar-group averages]
     D --> E[Generate individual PDF report cards]
     C --> F[Generate class award rankings]
     E --> G[Save Drive files and generation logs]
+    G --> H[Verify a full workbook archive at term end]
+    H --> I[Clear assessment inputs and advance the exam settings]
 ```
 
 The final version:
@@ -42,23 +49,30 @@ The final version:
 - preserves scores, ratings, books, grammar groups, comments, notes, formulas, formatting, and validation during that move;
 - keeps one blank separator row between class groups;
 - freezes the four identity columns while assessment columns scroll horizontally;
-- provides explicit student add/delete and class add/rename/delete commands;
+- provides a dropdown-based student form and confirmed student deletion, with class management in `반별설정`;
+- starts with 18 editable classes in the Starter, Beginner, Pre-inter, Inter, Advanced, and Powerstation sequence;
 - removes the redundant `출력여부` checkbox and uses active student rows for batch output;
 - calculates regular class averages and separate grammar-group averages;
-- generates two-subject or four-subject PDF report cards;
+- renders the entered score subjects and omits empty optional PDF sections;
 - creates class award rankings with tie handling;
-- optionally polishes teacher comments with the OpenAI Responses API; and
-- records generated file names, statuses, and Google Drive links.
+- optionally polishes teacher comments with the OpenAI Responses API, preserving originals and a retry position;
+- records generated file names, statuses, and Google Drive links; and
+- archives and verifies the workbook before clearing quarterly scores and comments and advancing the report title and month.
+
+There is no active roster-to-score synchronization. Some compatibility helpers remain in `Code.gs`, but the roster synchronization entry point is disabled and the old spreadsheet-change handler is a no-op. Opening the workbook only creates the menu.
 
 ## Main Workflow
 
-1. Staff maintain active classes and textbook defaults in `반별설정`.
-2. Staff add students and manage class placement directly in `성적입력`.
+1. Administrators maintain classes and textbook defaults directly in `반별설정`; additions and renames update the score-entry dropdown.
+2. Staff add students through a form: day, time, class, student name, and Grade.
 3. Entering or changing a class moves the intact row to the end of that class block.
 4. Staff enter scores, ratings, grammar groups, textbooks, and comments in the same row.
-5. A departing student is permanently removed only through an explicit delete action or `퇴원` status change.
+5. A departing student is permanently removed through the confirmed delete command. The enrollment-status and output-checkbox columns are no longer used.
 6. Teachers generate PDFs, polish comments, and create award rankings from the custom menu.
 7. The system saves PDFs to Google Drive and writes the result to `생성로그`.
+8. After the reporting cycle, an administrator archives the workbook, clears assessment inputs, and starts the next exam cycle.
+
+See the [English operating guide](docs/OPERATIONS.md) for installation, class management, and quarter-end precautions. A [Korean handoff guide](업데이트_이용방법.md) is also included for academy staff.
 
 ## Development Journey
 
@@ -86,7 +100,7 @@ The first repair was a guarded, non-destructive import model. It could update id
 
 Another iteration rebuilt validation rules during synchronization. The values survived, but Google Sheets also reset carefully assigned dropdown colors. The underlying problem was that one routine was responsible for both data movement and interface configuration.
 
-I separated those responsibilities, removed installable synchronization triggers, and made dropdown and sheet-format setup an explicit maintenance operation.
+I separated those responsibilities and moved away from installable synchronization triggers. In the current release, the legacy handlers are inactive rather than relying on privileged trigger deletion; ordinary score and comment edits do not initiate roster synchronization.
 
 ### 5. Moving to One Operational Sheet
 
@@ -101,15 +115,26 @@ Student and class lifecycle operations also became explicit. A class cannot be d
 Alphabetical sorting did not match the curriculum. For example, it could place `PowerStation` before `Pre-Inter`. I encoded a normalized domain order that handles differences in spaces, hyphens, and capitalization:
 
 ```text
-Starter 1-4
-Beginner 1-4
-Pre-Inter 1-4
-Advanced 1-4
-PowerStation 1-2
-Grammar 1-4
+Starter -> Beginner -> Pre-inter -> Inter -> Advanced -> Powerstation
 ```
 
-The class settings list and row-placement logic use the same normalized identity and ordering rules.
+Initial setup creates levels 1-3 in each of these six groups. Later class additions are allowed. The comparator also recognizes several legacy levels; unknown class names follow the known curriculum sequence.
+
+### 7. Making Comment Processing Recoverable
+
+Teachers reported that some Listening/Speaking comments remained unchanged and that API failures could interrupt a batch. I added header-alias handling, retries, and a saved row-and-subject cursor. A failed nonempty comment remains the next item to retry instead of being silently skipped. Original text is retained in cell notes, and blank AI output is rejected.
+
+The established Korean comment instructions and the `우리 이름이는/는` opening remain in place. Before saving a response, the program rechecks student identity and the original comment so a delayed API response does not overwrite a newer edit or another student's row.
+
+### 8. Designing the Next Reporting Cycle
+
+Once daily work was usable, the next requirement was reuse across the academic year. I added a quarter-end workflow that resolves an archive folder by name, copies the complete workbook, opens and verifies that copy, and only then clears the designated score and comment columns. Failure handling attempts a limited rollback and blocks a second reset when recovery is unresolved.
+
+The next exam is calculated from the configured output month: April, June, October, December, then April of the following year. Only the report title and output month advance; student records, class settings, ratings, books, and the PDF destination remain in place.
+
+### 9. Turning Reported Failures into Regression Tests
+
+I added a dependency-free Node.js suite covering student creation, intact-row movement, class renames and deletion, AI retries and concurrent edits, report preparation, and archive/reset failure paths. The current release passes 78 local tests. Google services are mocked; this does not substitute for testing permissions, PDF layout, API responses, and recovery on a disposable Google Sheets copy.
 
 The detailed problem-solving record is available in [PORTFOLIO_CASE_STUDY.md](PORTFOLIO_CASE_STUDY.md).
 
@@ -129,7 +154,8 @@ Each generated report includes:
 
 - Writing, Reading, and Listening/Speaking use class-based averages.
 - Grammar can use a separate `Grammar 평균그룹`, such as `A`, `B`, or `C`.
-- Blank score subjects are excluded from averages, charts, and report sections.
+- Blank or `X` score subjects are excluded from averages and charts; numeric zero remains a valid score.
+- Empty ratings, textbook rows, and comment sections are omitted rather than printed as empty placeholders.
 
 ### Award Ranking
 
@@ -168,15 +194,31 @@ The stronger outcome was adoption. Staff continued using the system, provided fe
 - Spreadsheet edit handling and document locking
 - OpenAI Responses API for optional comment polishing
 - Script Properties for secret storage
+- Node.js built-in test runner for regression tests
+
+## Verification and Limits
+
+Run the local suite with Node.js 22 or newer:
+
+```sh
+node --test tests/new-student.test.cjs tests/quarter-reset.test.cjs tests/workflows.test.cjs
+```
+
+No dependency installation is required. [Test documentation](tests/README.md) distinguishes simulated services from live behavior and lists the release checks still required in Google Sheets.
+
+Document locks coordinate cooperating script operations, not a teacher's direct typing. Pause all editing and API/PDF jobs during quarter-end reset. Student deletion is permanent, and reset intentionally clears formulas and notes inside the designated assessment columns after backup verification. Administrative role enforcement and sheet-protection rules are deployment responsibilities, not features automatically installed by this release.
 
 ## Repository Guide
 
 - [`Code.gs`](Code.gs): student and class management, safeguards, averages, PDF generation, AI comment polishing, and ranking logic
 - [`ReportTemplate.html`](ReportTemplate.html): two-page report-card template
+- [`StudentForm.html`](StudentForm.html): new-student dialog with live class choices
 - [`PORTFOLIO_CASE_STUDY.md`](PORTFOLIO_CASE_STUDY.md): detailed engineering iterations and decisions
 - [`업데이트_이용방법.md`](업데이트_이용방법.md): Korean-language operating and handoff guide
 - [`appsscript.json`](appsscript.json): runtime, timezone, and OAuth configuration
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md): English setup, routine operations, and archive/reset guidance
+- [`tests/`](tests/): synthetic-data regression suite and service harness
 
 ## Privacy and Responsible Use
 
-The public repository contains code, templates, and anonymized demonstrations only. Real names, scores, teacher comments, generated PDFs, API keys, and private Google Sheet contents are excluded. AI-based comment polishing is optional, and secrets are stored in Script Properties rather than source code.
+The public repository contains code, templates, synthetic test fixtures, and anonymized demonstrations only. Production rosters, real assessment records, generated PDFs, API keys, workbook backups, and the temporary one-time roster migration script are not included. AI-based comment polishing is optional, and secrets are stored in Script Properties rather than source code. Enabling it sends student names and selected teacher comments to the API; obtain the academy's approval and follow its student-data policy before use.
