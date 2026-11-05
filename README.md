@@ -6,6 +6,8 @@ Built with Google Sheets, Google Apps Script, HTML/CSS, Google Drive PDF export,
 
 **Current release:** November 2026. The original commit history and [development case study](PORTFOLIO_CASE_STUDY.md) trace the project from its first report generator through the current operating model.
 
+This repository presents the project's development decisions, real name-redacted results, and regression evidence as a portfolio case study.
+
 ## Actual Application Captures
 
 | Score-entry sheet | Class award ranking |
@@ -60,19 +62,6 @@ The final version:
 - archives and verifies the workbook before clearing quarterly scores and comments and advancing the report title and month.
 
 There is no active roster-to-score synchronization. Some compatibility helpers remain in `Code.gs`, but the roster synchronization entry point is disabled and the old spreadsheet-change handler is a no-op. Opening the workbook only creates the menu.
-
-## Main Workflow
-
-1. Administrators maintain classes and textbook defaults directly in `반별설정`; additions and renames update the score-entry dropdown.
-2. Staff add students through a form: day, time, class, student name, and Grade.
-3. Entering or changing a class moves the intact row to the end of that class block.
-4. Staff enter scores, ratings, grammar groups, textbooks, and comments in the same row.
-5. A departing student is permanently removed through the confirmed delete command. The enrollment-status and output-checkbox columns are no longer used.
-6. Teachers generate PDFs, polish comments, and create award rankings from the custom menu.
-7. The system saves PDFs to Google Drive and writes the result to `생성로그`.
-8. After the reporting cycle, an administrator archives the workbook, clears assessment inputs, and starts the next exam cycle.
-
-See the [English operating guide](docs/OPERATIONS.md) for installation, class management, and quarter-end precautions. A [Korean handoff guide](업데이트_이용방법.md) is also included for academy staff.
 
 ## Development Journey
 
@@ -214,9 +203,7 @@ Document locks coordinate cooperating script operations, not a teacher's direct 
 - [`ReportTemplate.html`](ReportTemplate.html): two-page report-card template
 - [`StudentForm.html`](StudentForm.html): new-student dialog with live class choices
 - [`PORTFOLIO_CASE_STUDY.md`](PORTFOLIO_CASE_STUDY.md): detailed engineering iterations and decisions
-- [`업데이트_이용방법.md`](업데이트_이용방법.md): Korean-language operating and handoff guide
 - [`appsscript.json`](appsscript.json): runtime, timezone, and OAuth configuration
-- [`docs/OPERATIONS.md`](docs/OPERATIONS.md): English setup, routine operations, and archive/reset guidance
 - [`tests/`](tests/): synthetic-data regression suite and service harness
 
 ## Privacy and Responsible Use

@@ -15,6 +15,8 @@ The current README gallery uses the following files:
 
 These are actual captures and PDF renderings, not recreated interfaces. Name masking is permanent in the published PNG pixels, rather than a removable PDF annotation, CSS overlay, or lightly blurred text. Screenshot dimensions and pixels outside the masking regions are preserved during processing. The original source images and PDF are not committed.
 
+The project owner approved public display of these name-redacted captures, including the remaining assessment figures and comment text, for this portfolio.
+
 Scores, class names, teacher-comment text other than the student's name, and the original settings remain visible as supplied. Name masking is not a guarantee of complete anonymization. Differences in reporting dates, titles, or column labels between captures are retained rather than retouched to imply a single synchronized session. These assets do not establish that live service acceptance tests were performed for the repository release.
 
 ## Legacy Mockups
